@@ -16,6 +16,7 @@ export DP_COMPILE_INFER=0
 export DP_TF32_INFER=0
 export DP_AMP_INFER=0
 
+mkdir -p "$OUTPUT"
 exec python "$ROOT/tolerance_freeze.py" \
   --model "$MODEL" \
   --structure "$STRUCTURE" \

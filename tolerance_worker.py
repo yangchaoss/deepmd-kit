@@ -72,7 +72,7 @@ def main() -> int:
             * (0.37 + phase)
         )
         calc = DP(model=a.model, nlist_backend="auto")
-        model = calc.dp.get_model()
+        model = calc.dp.deep_eval._dpmodel
         parameter_dtypes = sorted({str(parameter.dtype) for parameter in model.parameters()})
         if parameter_dtypes != ["torch.float32"]:
             raise RuntimeError(f"expected FP32 model parameters, got {parameter_dtypes}")
