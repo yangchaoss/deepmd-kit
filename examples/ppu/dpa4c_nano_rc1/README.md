@@ -61,3 +61,8 @@ compiler wrapper and frozen PyTorch/CUDA identity during image construction.
 Passing that build is necessary but not sufficient: a fresh PPU Sandbox must
 still boot from the resulting image and pass device/runtime smoke checks before
 the image identity can be frozen in `source-lock.json`.
+
+Run `runtime/verify_base_sandbox.py` in that fresh device Sandbox. It checks the
+frozen Torch/CUDA identity, exactly one visible PPU device, the compiler and
+`ppu-smi` paths, and a synchronized FP32 device tensor operation. This remains
+an environment smoke test; it does not validate DPA4C or the Golden Candidate.
