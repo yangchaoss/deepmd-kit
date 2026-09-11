@@ -17,10 +17,24 @@ export DP_TF32_INFER=0
 export DP_AMP_INFER=0
 
 mkdir -p "$OUTPUT"
-exec python "$ROOT/tolerance_freeze.py" \
+set +e
+python "$ROOT/tolerance_freeze.py" \
   --model "$MODEL" \
   --structure "$STRUCTURE" \
   --output "$OUTPUT" \
   --source-commit "$SOURCE_COMMIT" \
   --source-tree "$SOURCE_TREE" \
   2>&1 | tee "$OUTPUT/tolerance-freeze.log"
+status=${PIPESTATUS[0]}
+set -e
+
+# tee writes the log after the Python process emits its final byte. Rebuild
+# the manifest only after the pipeline has drained so the log hash is real.
+(
+  cd "$OUTPUT"
+  while IFS= read -r -d '' path; do
+    digest=$(sha256sum "$path" | awk '{print $1}')
+    printf '%s  %s\n' "$digest" "${path#./}"
+  done < <(find . -type f ! -name SHA256SUMS -print0 | sort -z)
+) > "$OUTPUT/SHA256SUMS"
+exit "$status"
