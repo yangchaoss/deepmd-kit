@@ -48,12 +48,14 @@ evidence are written below it, keeping the controlled source tree clean.
 This entry point remains a development probe; it does not run the formal
 20-warmup + 500-measured paired benchmark.
 
-## Remaining environment gate
+## Environment gate status
 
-The source baseline is frozen by this branch. The Frozen PPU Runtime Image is
-a separate identity and is not yet declared here because no verified Bohrium
-Image ID/digest and successful build log are currently available. Do not infer
-runtime-image reproducibility from this source freeze.
+The source baseline is frozen by this branch. The candidate-independent
+Frozen PPU Runtime Image build passed as Bohrium Image `156770`, with the image,
+base-image and Dockerfile digests recorded in `source-lock.json`. The first
+fresh-Sandbox requests were rejected before instance creation because the PPU
+cluster was still preparing the new image. Therefore environment build is PASS,
+but boot and device-runtime acceptance remain PENDING.
 
 The candidate-independent recipe for the first infrastructure gate is tracked
 at `runtime/Dockerfile.minimal-probe`. It verifies the base image, PPU SDK CUDA

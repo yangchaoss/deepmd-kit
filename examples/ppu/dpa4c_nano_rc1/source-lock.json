@@ -19,9 +19,14 @@
     "structure_sha256": "137056e51cf63bd7dabf0508a29959218baf109da0c5e19a3765d11873c891e7"
   },
   "runtime_image": {
-    "status": "UNVERIFIED",
-    "image_id": null,
-    "image_digest": null,
-    "reason": "No successful Bohrium PPU runtime image build and boot evidence is frozen yet."
+    "status": "BUILD_PASS_BOOT_PENDING",
+    "image_id": 156770,
+    "image_url": "registry.dp.tech/dptech/dp/native/prod-27666/4553069/dpa4c-nano-rc1-runtime-probe:20260911-yangchao-r1",
+    "image_digest": "sha256:f475eb7a0488b8785818b506fc17e9c411b7ef526fdae2d974c62a5c42937061",
+    "base_image_digest": "sha256:20af455a90c11599de3dbec145083882ea8fe04ec37f4f57ce70a1dcbf5b0780",
+    "dockerfile_sha256": "b277f1d370f54179d823c56ac57bead9581a83a0ee1a72c9320d83f2d7396f5c",
+    "build_probe": "PASS",
+    "boot_probe": "PENDING_IMAGE_PREPARATION",
+    "reason": "Bohrium image build passed, but the PPU cluster was still preparing the image; no Sandbox instance was created."
   }
 }
