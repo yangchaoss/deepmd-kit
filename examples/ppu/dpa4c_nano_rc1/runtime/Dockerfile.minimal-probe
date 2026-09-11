@@ -1,0 +1,23 @@
+FROM registry.dp.tech/dptech/dp/native/prod-87/training-xpu-pytorch:26.04.post1
+
+ENV PPU_SDK=/usr/local/PPU_SDK \
+    CUDA_HOME=/usr/local/PPU_SDK/CUDA_SDK \
+    CUDA_PATH=/usr/local/PPU_SDK/CUDA_SDK \
+    CUDAToolkit_ROOT=/usr/local/PPU_SDK/CUDA_SDK
+
+# This probe validates only the rebuildable PPU runtime foundation. Candidate
+# source and binaries remain external and are rebuilt later in a fresh Sandbox.
+RUN set -eux; \
+    test -x /opt/ac2/bin/python; \
+    test -d "$PPU_SDK"; \
+    test -x "$CUDA_HOME/bin/nvcc"; \
+    "$CUDA_HOME/bin/nvcc" --version; \
+    /opt/ac2/bin/python -c 'import torch; expected="2.9.0+ali.10.ppu2.1.0.cu130"; assert torch.__version__ == expected, (torch.__version__, expected); assert str(torch.version.cuda) == "13.0", torch.version.cuda; print("PPU_RUNTIME_BUILD_PROBE=PASS"); print("TORCH_VERSION=" + torch.__version__); print("TORCH_CUDA_VERSION=" + str(torch.version.cuda))'
+
+LABEL org.opencontainers.image.title="DPA4C Nano rc1 frozen PPU runtime probe" \
+      org.opencontainers.image.description="Candidate-independent PPU SDK 2.1 and PyTorch 2.9 runtime build probe" \
+      org.opencontainers.image.source="https://github.com/yangchaoss/deepmd-kit" \
+      com.dptech.dpa4c.upstream-commit="14a71f13bb840c10d78465f75a00e3a31764a0fd" \
+      com.dptech.dpa4c.runtime-contract="ppu-sdk-2.1_cuda-13.0_torch-2.9.0"
+
+WORKDIR /workspace

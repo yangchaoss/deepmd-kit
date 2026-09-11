@@ -54,3 +54,10 @@ The source baseline is frozen by this branch. The Frozen PPU Runtime Image is
 a separate identity and is not yet declared here because no verified Bohrium
 Image ID/digest and successful build log are currently available. Do not infer
 runtime-image reproducibility from this source freeze.
+
+The candidate-independent recipe for the first infrastructure gate is tracked
+at `runtime/Dockerfile.minimal-probe`. It verifies the base image, PPU SDK CUDA
+compiler wrapper and frozen PyTorch/CUDA identity during image construction.
+Passing that build is necessary but not sufficient: a fresh PPU Sandbox must
+still boot from the resulting image and pass device/runtime smoke checks before
+the image identity can be frozen in `source-lock.json`.
