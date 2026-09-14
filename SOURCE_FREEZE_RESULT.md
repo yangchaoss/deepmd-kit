@@ -6,13 +6,16 @@ from Git so this file cannot become a second source of identity.
 
 ```text
 repository: https://github.com/yangchaoss/deepmd-kit.git
-starter_tag: dpa4c-ppu-nano-starter-v1.0.0-rc2
-commit: git rev-parse dpa4c-ppu-nano-starter-v1.0.0-rc2^{commit}
-tree: git rev-parse dpa4c-ppu-nano-starter-v1.0.0-rc2^{tree}
+starter_tag: dpa4c-ppu-nano-starter-v1.0.0-rc3
+commit: git rev-parse dpa4c-ppu-nano-starter-v1.0.0-rc3^{commit}
+tree: git rev-parse dpa4c-ppu-nano-starter-v1.0.0-rc3^{tree}
 ```
 
-The published `dpa4c-ppu-nano-starter-v1.0.0-rc1` tag is superseded
-historical material and must not be used as the current starter.
+The published `dpa4c-ppu-nano-starter-v1.0.0-rc1` and
+`dpa4c-ppu-nano-starter-v1.0.0-rc2` tags are superseded historical material
+and must not be used as the current starter. rc2 was superseded after final
+Runtime Image prevalidation exposed candidate dependency inheritance and
+failed the isolation gate; rc1 and rc2 remain history only.
 
 `contest/README.md` is the single authoritative contestant-facing contract.
 The `contest/contest.sh` entrypoint remains the only build, test, benchmark,

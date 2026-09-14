@@ -93,6 +93,7 @@ class PublicBenchmarkTest(unittest.TestCase):
         self.assertEqual(command[command.index("--find-links") + 1], str(wheelhouse))
         self.assertIn("--no-deps", command)
         self.assertIn("--require-hashes", command)
+        self.assertIn("--ignore-installed", command)
         self.assertEqual(command[-2:], ["-r", str(flow.RUNTIME_REQUIREMENTS)])
         self.assertEqual(identity["path"], "contest/config/runtime-requirements.txt")
         self.assertEqual(identity["sha256"], flow.sha256(flow.RUNTIME_REQUIREMENTS))
@@ -127,6 +128,7 @@ class PublicBenchmarkTest(unittest.TestCase):
             self.assertEqual(command[command.index("--find-links") + 1], str(wheelhouse))
             self.assertIn("--no-deps", command)
             self.assertIn("--require-hashes", command)
+            self.assertIn("--ignore-installed", command)
 
     def test_missing_wheelhouse_fails_fast(self):
         with tempfile.TemporaryDirectory() as directory:

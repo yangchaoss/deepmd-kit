@@ -27,7 +27,7 @@ WHEELHOUSE_ENV = "DPA4C_CONTEST_WHEELHOUSE"
 CANDIDATE_MANIFEST = CONTEST / "config" / "submission.json"
 FROZEN_TORCH_VERSION = "2.9.0+ali.10.ppu2.1.0.cu130"
 FROZEN_TORCH_ROOT = Path("/opt/ac2")
-DEFAULT_STARTER_REF = "dpa4c-ppu-nano-starter-v1.0.0-rc2"
+DEFAULT_STARTER_REF = "dpa4c-ppu-nano-starter-v1.0.0-rc3"
 BENCHMARK_WORKER = CONTEST / "scripts" / "public_route_worker.py"
 BENCHMARK_RUNNER = CONTEST / "scripts" / "public_benchmark.py"
 BINARY_IMPLEMENTATION_SUFFIXES = {".so", ".o", ".a", ".whl"}
@@ -94,6 +94,7 @@ def offline_pip_install(
     command = [
         str(python), "-s", "-m", "pip", "install", "--no-index",
         "--find-links", str(wheelhouse), "--no-deps", "--require-hashes",
+        "--ignore-installed",
         "-r", str(requirements),
     ]
     run(command, cwd=run_root, log=log, env=clean_env(python))
