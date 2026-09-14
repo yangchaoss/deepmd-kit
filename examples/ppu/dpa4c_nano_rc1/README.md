@@ -32,6 +32,11 @@ examples/ppu/dpa4c_nano_rc1/scripts/contestant.sh all \
   --work-root /external/dpa4c-nano-run
 ```
 
+For an image/bootstrap pipeline that must create a checkout non-interactively,
+use the tracked `scripts/clone_fixed.sh --repository URL --ref COMMIT
+--checkout NEW_DIR`; it requires an immutable 40-hex commit and refuses an
+existing target directory.
+
 `--work-root` must be outside the checkout. The command creates one isolated
 candidate venv, compiles and binds the current source, runs the device dispatch
 check, executes a public `1 warmup + 2 measured` E/F/virial/stress smoke,
