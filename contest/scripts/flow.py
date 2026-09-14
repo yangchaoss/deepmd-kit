@@ -106,32 +106,42 @@ def site_packages(python: Path, run_root: Path) -> Path:
     return Path(out).resolve()
 
 
-def inspect_build_environment(python: Path, run_root: Path) -> dict[str, object]:
-    code = """
+def inspect_python_packages(
+    python: Path, run_root: Path, packages: tuple[tuple[str, str], ...]
+) -> dict[str, object]:
+    package_list = repr(packages)
+    code = f"""
 import importlib
 import importlib.metadata
 import json
 import pathlib
-items = {}
-for module_name, distribution in (
-    ('scikit_build_core', 'scikit-build-core'),
-    ('dependency_groups', 'dependency-groups'),
-    ('pathspec', 'pathspec'),
-    ('packaging', 'packaging'),
-    ('setuptools_scm', 'setuptools-scm'),
-    ('torch', 'torch'),
-):
+items = {{}}
+for module_name, distribution in {package_list}:
     module = importlib.import_module(module_name)
-    items[module_name] = {
+    items[module_name] = {{
         'version': importlib.metadata.version(distribution),
         'path': str(pathlib.Path(module.__file__).resolve()),
-    }
+    }}
 print(json.dumps(items))
 """
     output = subprocess.check_output(
         [str(python), "-s", "-c", code], cwd=run_root, env=clean_env(python), text=True
     )
-    result = json.loads(output)
+    return json.loads(output)
+
+
+def inspect_build_environment(python: Path, run_root: Path) -> dict[str, object]:
+    packages = (
+        ("scikit_build_core", "scikit-build-core"),
+        ("dependency_groups", "dependency-groups"),
+        ("pathspec", "pathspec"),
+        ("packaging", "packaging"),
+        ("setuptools_scm", "setuptools-scm"),
+        ("hatch_fancy_pypi_readme", "hatch-fancy-pypi-readme"),
+        ("setuptools", "setuptools"),
+        ("torch", "torch"),
+    )
+    result = inspect_python_packages(python, run_root, packages)
     torch = result["torch"]
     if torch["version"] != FROZEN_TORCH_VERSION:
         raise RuntimeError(f"unexpected build-time Torch version: {torch['version']}")
@@ -151,8 +161,11 @@ def build(args) -> None:
     python = candidate_python(run_root)
     if not python.is_file():
         run([str(baseline_python), "-m", "venv", "--system-site-packages", str(python.parents[1])], cwd=run_root, log=run_root / "logs" / "01-venv.log", env=clean_env(baseline_python))
+    setuptools_before = inspect_python_packages(
+        python, run_root, (("setuptools", "setuptools"),)
+    )["setuptools"]
     run(
-        [str(python), "-s", "-m", "pip", "install", "--require-hashes", "-r", str(BUILD_REQUIREMENTS)],
+        [str(python), "-s", "-m", "pip", "install", "--no-deps", "--require-hashes", "-r", str(BUILD_REQUIREMENTS)],
         cwd=run_root,
         log=run_root / "logs" / "02-build-requirements.log",
         env=clean_env(python),
@@ -214,6 +227,10 @@ def build(args) -> None:
         "candidate_prefix": str(site),
         "candidate_entry": {"path": str(entry), "files": {p.name: sha256(p) for p in sorted(entry.glob("*.py"))}},
         "build_environment": build_environment,
+        "setuptools_identity": {
+            "before_build_requirements": setuptools_before,
+            "after_build_requirements": build_environment["setuptools"],
+        },
         "assets": {"model": {"path": str(model), "sha256": sha256(model)}, "structure": {"path": str(structure), "sha256": sha256(structure)}},
         "formal_performance": "NOT_RUN_BY_SCOPE",
     }
