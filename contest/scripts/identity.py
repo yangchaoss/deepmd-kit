@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import os
 import sys
@@ -32,6 +33,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--candidate-entry", action="store_true")
     parser.add_argument("--expected-artifact", type=Path)
+    parser.add_argument("--expected-torch-version")
+    parser.add_argument("--expected-torch-root", type=Path)
     args = parser.parse_args()
     result: dict[str, object] = {
         "status": "FAIL",
@@ -47,6 +50,7 @@ def main() -> int:
     try:
         import deepmd
         import deepmd.lib
+        import torch
         from deepmd.calculator import DP  # noqa: F401
 
         expected = args.expected_prefix.resolve()
@@ -69,8 +73,21 @@ def main() -> int:
                 "deepmd": str(deepmd_path),
                 "deepmd_lib": str(deepmd_lib_path),
                 "deepmd_elfs": package_elfs,
+                "torch": {
+                    "version": importlib.metadata.version("torch"),
+                    "path": str(Path(torch.__file__).resolve()),
+                },
             }
         )
+        if (
+            args.expected_torch_version
+            and result["torch"]["version"] != args.expected_torch_version
+        ):
+            raise RuntimeError(f"unexpected Torch version: {result['torch']['version']}")
+        if args.expected_torch_root and not under(
+            Path(torch.__file__), args.expected_torch_root
+        ):
+            raise RuntimeError(f"Torch escaped frozen root: {torch.__file__}")
         if args.candidate_entry:
             import dpa4c_candidate
 

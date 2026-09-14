@@ -17,6 +17,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CONTEST = ROOT / "contest"
 CONFIG = CONTEST / "config" / "runtime.json"
+BUILD_REQUIREMENTS = CONTEST / "config" / "build-requirements.txt"
+FROZEN_TORCH_VERSION = "2.9.0+ali.10.ppu2.1.0.cu130"
+FROZEN_TORCH_ROOT = Path("/opt/ac2")
 
 
 def sha256(path: Path) -> str:
@@ -103,6 +106,41 @@ def site_packages(python: Path, run_root: Path) -> Path:
     return Path(out).resolve()
 
 
+def inspect_build_environment(python: Path, run_root: Path) -> dict[str, object]:
+    code = """
+import importlib
+import importlib.metadata
+import json
+import pathlib
+items = {}
+for module_name, distribution in (
+    ('scikit_build_core', 'scikit-build-core'),
+    ('dependency_groups', 'dependency-groups'),
+    ('pathspec', 'pathspec'),
+    ('packaging', 'packaging'),
+    ('torch', 'torch'),
+):
+    module = importlib.import_module(module_name)
+    items[module_name] = {
+        'version': importlib.metadata.version(distribution),
+        'path': str(pathlib.Path(module.__file__).resolve()),
+    }
+print(json.dumps(items))
+"""
+    output = subprocess.check_output(
+        [str(python), "-s", "-c", code], cwd=run_root, env=clean_env(python), text=True
+    )
+    result = json.loads(output)
+    torch = result["torch"]
+    if torch["version"] != FROZEN_TORCH_VERSION:
+        raise RuntimeError(f"unexpected build-time Torch version: {torch['version']}")
+    try:
+        Path(torch["path"]).resolve().relative_to(FROZEN_TORCH_ROOT.resolve())
+    except ValueError as exc:
+        raise RuntimeError(f"build-time Torch escaped frozen root: {torch['path']}") from exc
+    return result
+
+
 def build(args) -> None:
     config, run_root, model, structure = resolve_inputs(args)
     identity = require_clean_committed()
@@ -112,6 +150,13 @@ def build(args) -> None:
     python = candidate_python(run_root)
     if not python.is_file():
         run([str(baseline_python), "-m", "venv", "--system-site-packages", str(python.parents[1])], cwd=run_root, log=run_root / "logs" / "01-venv.log", env=clean_env(baseline_python))
+    run(
+        [str(python), "-s", "-m", "pip", "install", "--require-hashes", "-r", str(BUILD_REQUIREMENTS)],
+        cwd=run_root,
+        log=run_root / "logs" / "02-build-requirements.log",
+        env=clean_env(python),
+    )
+    build_environment = inspect_build_environment(python, run_root)
     dist = run_root / "build" / "wheels"
     dist.mkdir(exist_ok=True)
     if any(dist.iterdir()):
@@ -121,6 +166,8 @@ def build(args) -> None:
         raise RuntimeError(f"fresh scikit-build directory is not empty: {scikit_build}")
     wheel_env = clean_env(python)
     wheel_env["SKBUILD_BUILD_DIR"] = str(scikit_build)
+    wheel_env["DP_ENABLE_TENSORFLOW"] = "0"
+    wheel_env["DP_ENABLE_PYTORCH"] = "1"
     run(
         [
             str(python),
@@ -130,6 +177,7 @@ def build(args) -> None:
             "wheel",
             ".",
             "--no-deps",
+            "--no-build-isolation",
             "--wheel-dir",
             str(dist),
         ],
@@ -164,13 +212,21 @@ def build(args) -> None:
         "candidate_python": str(python),
         "candidate_prefix": str(site),
         "candidate_entry": {"path": str(entry), "files": {p.name: sha256(p) for p in sorted(entry.glob("*.py"))}},
+        "build_environment": build_environment,
         "assets": {"model": {"path": str(model), "sha256": sha256(model)}, "structure": {"path": str(structure), "sha256": sha256(structure)}},
         "formal_performance": "NOT_RUN_BY_SCOPE",
     }
-    (run_root / "results" / "BUILD_STATUS.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    run([str(python), "-s", str(CONTEST / "scripts" / "identity.py"), "--expected-prefix", str(site), "--candidate-entry", "--output", str(run_root / "results" / "candidate-identity.json")], cwd=run_root, log=run_root / "logs" / "04-candidate-identity.log", env=clean_env(python))
+    run([str(python), "-s", str(CONTEST / "scripts" / "identity.py"), "--expected-prefix", str(site), "--candidate-entry", "--expected-torch-version", FROZEN_TORCH_VERSION, "--expected-torch-root", str(FROZEN_TORCH_ROOT), "--output", str(run_root / "results" / "candidate-identity.json")], cwd=run_root, log=run_root / "logs" / "04-candidate-identity.log", env=clean_env(python))
+    candidate_identity = json.loads(
+        (run_root / "results" / "candidate-identity.json").read_text()
+    )
+    if candidate_identity["torch"] != build_environment["torch"]:
+        raise RuntimeError("candidate runtime Torch identity differs from build-time Torch")
     baseline_prefix = site_packages(baseline_python, run_root)
-    run([str(baseline_python), "-s", str(CONTEST / "scripts" / "identity.py"), "--expected-prefix", str(baseline_prefix), "--output", str(run_root / "results" / "baseline-identity.json")], cwd=run_root, log=run_root / "logs" / "05-baseline-identity.log", env=clean_env(baseline_python))
+    run([str(baseline_python), "-s", str(CONTEST / "scripts" / "identity.py"), "--expected-prefix", str(baseline_prefix), "--expected-torch-version", FROZEN_TORCH_VERSION, "--expected-torch-root", str(FROZEN_TORCH_ROOT), "--output", str(run_root / "results" / "baseline-identity.json")], cwd=run_root, log=run_root / "logs" / "05-baseline-identity.log", env=clean_env(baseline_python))
+    (run_root / "results" / "BUILD_STATUS.json").write_text(
+        json.dumps(manifest, indent=2) + "\n"
+    )
 
 
 def test(args) -> None:
