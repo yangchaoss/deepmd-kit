@@ -107,6 +107,39 @@ class RuntimeIdentityGateTest(unittest.TestCase):
             )
             self.assertEqual(result["status"], "BENCHMARK_INVALID")
 
+    def test_both_wrong_prioritizes_benchmark_invalid_before_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            run_root = root / "run"
+            (run_root / "results").mkdir(parents=True)
+            (run_root / "logs").mkdir()
+            status, candidate, baseline = self.fixture(root)
+            (run_root / "results" / "BUILD_STATUS.json").write_text(json.dumps(status))
+            (run_root / "results" / "SMOKE_STATUS.json").write_text('{"status":"PASS"}')
+            wrong_candidate = dict(candidate)
+            wrong_candidate.update({"status": "FAIL", "deepmd": "/wrong/candidate/deepmd.py"})
+            wrong_baseline = dict(baseline)
+            wrong_baseline.update({"status": "FAIL", "deepmd": "/wrong/baseline/deepmd.py"})
+            calls = []
+
+            def fake_identity(*args, output, **kwargs):
+                return (2, wrong_candidate) if "candidate" in output.name else (2, wrong_baseline)
+
+            args = Namespace(run_root=run_root, assets_root=root, baseline_python=None)
+            with (
+                mock.patch.object(flow, "resolve_inputs", return_value=({"baseline_python": "/opt/ac2/bin/python"}, run_root, root / "model", root / "structure")),
+                mock.patch.object(flow, "require_clean_committed", return_value=status["source"]),
+                mock.patch.object(flow, "run_identity", side_effect=fake_identity),
+                mock.patch.object(flow, "run", side_effect=lambda *a, **k: calls.append((a, k))),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "BENCHMARK_INVALID"):
+                    flow.test(args)
+            self.assertEqual(calls, [])
+            self.assertFalse((run_root / "results" / "SMOKE_STATUS.json").exists())
+            gate = json.loads((run_root / "results" / "RUNTIME_IDENTITY_STATUS.json").read_text())
+            self.assertEqual(gate["status"], "BENCHMARK_INVALID")
+            self.assertFalse(gate["workers_started"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -218,10 +218,10 @@ def validate_runtime_identities(
         frozen["baseline"], candidate=False
     ):
         baseline_errors.append("baseline stable runtime identity changed")
-    if candidate_errors:
-        status = "CANDIDATE_INVALID"
-    elif baseline_errors:
+    if baseline_errors:
         status = "BENCHMARK_INVALID"
+    elif candidate_errors:
+        status = "CANDIDATE_INVALID"
     else:
         status = "PASS"
     return {
