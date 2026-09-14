@@ -85,7 +85,7 @@ class RuntimeIdentityGateTest(unittest.TestCase):
             args = Namespace(run_root=run_root, assets_root=root, baseline_python=None)
             with (
                 mock.patch.object(flow, "resolve_inputs", return_value=({"baseline_python": "/opt/ac2/bin/python"}, run_root, root / "model", root / "structure")),
-                mock.patch.object(flow, "require_clean_committed", return_value=status["source"]),
+                mock.patch.object(flow, "source_identity", return_value=status["source"]),
                 mock.patch.object(flow, "run_identity", side_effect=fake_identity),
                 mock.patch.object(flow, "run", side_effect=lambda *a, **k: calls.append((a, k))),
             ):
@@ -128,7 +128,7 @@ class RuntimeIdentityGateTest(unittest.TestCase):
             args = Namespace(run_root=run_root, assets_root=root, baseline_python=None)
             with (
                 mock.patch.object(flow, "resolve_inputs", return_value=({"baseline_python": "/opt/ac2/bin/python"}, run_root, root / "model", root / "structure")),
-                mock.patch.object(flow, "require_clean_committed", return_value=status["source"]),
+                mock.patch.object(flow, "source_identity", return_value=status["source"]),
                 mock.patch.object(flow, "run_identity", side_effect=fake_identity),
                 mock.patch.object(flow, "run", side_effect=lambda *a, **k: calls.append((a, k))),
             ):

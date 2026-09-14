@@ -1,0 +1,16 @@
+{
+  "schema_version": "dpa4c-ppu-contest.candidate-contract.v1",
+  "entrypoint": "dpa4c_candidate:create_session",
+  "entrypoint_contract": "create_session(model=...) returns an object with evaluate(atoms)",
+  "implementations": [
+    "installed DeepMD calculator",
+    "installed custom extension initialized by candidate session"
+  ],
+  "commands": {
+    "build": "contest/contest.sh build",
+    "test": "contest/contest.sh test",
+    "benchmark": "contest/contest.sh benchmark",
+    "package": "contest/contest.sh package"
+  },
+  "private_runner_or_validator_included": false
+}

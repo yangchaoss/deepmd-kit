@@ -10,6 +10,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -18,8 +19,13 @@ ROOT = Path(__file__).resolve().parents[2]
 CONTEST = ROOT / "contest"
 CONFIG = CONTEST / "config" / "runtime.json"
 BUILD_REQUIREMENTS = CONTEST / "config" / "build-requirements.txt"
+CANDIDATE_MANIFEST = CONTEST / "config" / "submission.json"
 FROZEN_TORCH_VERSION = "2.9.0+ali.10.ppu2.1.0.cu130"
 FROZEN_TORCH_ROOT = Path("/opt/ac2")
+DEFAULT_STARTER_REF = "dpa4c-ppu-nano-starter-v1.0.0-rc1"
+BENCHMARK_WORKER = CONTEST / "scripts" / "public_route_worker.py"
+BENCHMARK_RUNNER = CONTEST / "scripts" / "public_benchmark.py"
+BINARY_IMPLEMENTATION_SUFFIXES = {".so", ".o", ".a", ".whl"}
 
 
 def sha256(path: Path) -> str:
@@ -79,6 +85,23 @@ def clean_env(python: Path) -> dict[str, str]:
 
 def git(command: list[str]) -> str:
     return subprocess.check_output(["git", "-C", str(ROOT), *command], text=True).strip()
+
+
+def tracked_manifest_sha() -> str:
+    payload = subprocess.check_output(
+        ["git", "-C", str(ROOT), "ls-files", "-s", "-z"]
+    )
+    return hashlib.sha256(payload).hexdigest()
+
+
+def source_identity() -> dict[str, str]:
+    identity = require_clean_committed()
+    identity.update({
+        "repository": git(["remote", "get-url", "origin"]),
+        "branch": git(["branch", "--show-current"]),
+        "tracked_manifest_sha256": tracked_manifest_sha(),
+    })
+    return identity
 
 
 def require_clean_committed() -> dict[str, str]:
@@ -231,20 +254,59 @@ def validate_runtime_identities(
         "candidate": {
             "returncode": candidate_returncode,
             "errors": candidate_errors,
+            "identity": candidate_identity,
             "stable_identity": stable_identity(candidate_identity, candidate=True),
         },
         "baseline": {
             "returncode": baseline_returncode,
             "errors": baseline_errors,
+            "identity": baseline_identity,
             "stable_identity": stable_identity(baseline_identity, candidate=False),
         },
     }
 
 
+def same_source(recorded: dict[str, object], current: dict[str, str]) -> bool:
+    return all(recorded.get(key) == current[key] for key in ("commit", "tree"))
+
+
+def runtime_identity_gate(
+    args, build_status: dict[str, object], *, output_name: str, log_prefix: str
+) -> dict[str, object]:
+    config, run_root, _, _ = resolve_inputs(args)
+    python = Path(build_status["candidate_python"])
+    baseline_python = Path(args.baseline_python or config["baseline_python"])
+    candidate_output = run_root / "results" / f"{log_prefix}-candidate-identity.json"
+    baseline_output = run_root / "results" / f"{log_prefix}-baseline-identity.json"
+    candidate_rc, candidate = run_identity(
+        [str(python), "-s", str(CONTEST / "scripts" / "identity.py"),
+         "--expected-prefix", build_status["candidate_prefix"], "--candidate-entry",
+         "--expected-torch-version", FROZEN_TORCH_VERSION,
+         "--expected-torch-root", str(FROZEN_TORCH_ROOT), "--output", str(candidate_output)],
+        cwd=run_root, log=run_root / "logs" / f"{log_prefix}-candidate-identity.log",
+        env=clean_env(python), output=candidate_output,
+    )
+    baseline_rc, baseline = run_identity(
+        [str(baseline_python), "-s", str(CONTEST / "scripts" / "identity.py"),
+         "--expected-prefix", build_status["baseline_prefix"],
+         "--expected-torch-version", FROZEN_TORCH_VERSION,
+         "--expected-torch-root", str(FROZEN_TORCH_ROOT), "--output", str(baseline_output)],
+        cwd=run_root, log=run_root / "logs" / f"{log_prefix}-baseline-identity.log",
+        env=clean_env(baseline_python), output=baseline_output,
+    )
+    result = validate_runtime_identities(
+        build_status, candidate, baseline,
+        candidate_returncode=candidate_rc, baseline_returncode=baseline_rc,
+    )
+    (run_root / "results" / output_name).write_text(json.dumps(result, indent=2) + "\n")
+    return result
+
+
 def build(args) -> None:
     config, run_root, model, structure = resolve_inputs(args)
-    identity = require_clean_committed()
-    for name in ("build", "install", "logs", "results", "submission"):
+    identity = source_identity()
+    git(["ls-files", "--error-unmatch", str(CANDIDATE_MANIFEST.relative_to(ROOT))])
+    for name in ("build", "install", "logs", "results"):
         (run_root / name).mkdir(parents=True, exist_ok=True)
     baseline_python = Path(args.baseline_python or config["baseline_python"])
     python = candidate_python(run_root)
@@ -311,6 +373,17 @@ def build(args) -> None:
         "schema_version": "dpa4c-ppu-contest.build.v1",
         "status": "PASS",
         "source": identity,
+        "tracked_candidate_manifest": {
+            "path": str(CANDIDATE_MANIFEST.relative_to(ROOT)),
+            "sha256": sha256(CANDIDATE_MANIFEST),
+        },
+        "build_command": [str(ROOT / "contest" / "contest.sh"), "build"],
+        "build_configuration": {
+            "DP_ENABLE_TENSORFLOW": "0", "DP_ENABLE_PYTORCH": "1",
+            "SKBUILD_BUILD_DIR": str(scikit_build),
+            "requirements": str(BUILD_REQUIREMENTS),
+            "requirements_sha256": sha256(BUILD_REQUIREMENTS),
+        },
         "wheel": {"path": str(wheel), "sha256": sha256(wheel), "size_bytes": wheel.stat().st_size},
         "candidate_python": str(python),
         "candidate_prefix": str(site),
@@ -346,40 +419,19 @@ def build(args) -> None:
 
 def test(args) -> None:
     config, run_root, model, structure = resolve_inputs(args)
-    identity = require_clean_committed()
+    identity = source_identity()
     status_path = run_root / "results" / "BUILD_STATUS.json"
     status = json.loads(status_path.read_text())
-    if status.get("status") != "PASS" or status.get("source") != identity:
+    if status.get("status") != "PASS" or not same_source(status.get("source", {}), identity):
         raise RuntimeError("test source identity does not match successful build")
     python = Path(status["candidate_python"])
     baseline_python = Path(args.baseline_python or config["baseline_python"])
     smoke_status = run_root / "results" / "SMOKE_STATUS.json"
     smoke_status.unlink(missing_ok=True)
-    candidate_pretest = run_root / "results" / "pretest-candidate-identity.json"
-    baseline_pretest = run_root / "results" / "pretest-baseline-identity.json"
-    candidate_rc, candidate_identity = run_identity(
-        [str(python), "-s", str(CONTEST / "scripts" / "identity.py"), "--expected-prefix", status["candidate_prefix"], "--candidate-entry", "--expected-torch-version", FROZEN_TORCH_VERSION, "--expected-torch-root", str(FROZEN_TORCH_ROOT), "--output", str(candidate_pretest)],
-        cwd=run_root,
-        log=run_root / "logs" / "06-pretest-candidate-identity.log",
-        env=clean_env(python),
-        output=candidate_pretest,
-    )
-    baseline_rc, baseline_identity = run_identity(
-        [str(baseline_python), "-s", str(CONTEST / "scripts" / "identity.py"), "--expected-prefix", status["baseline_prefix"], "--expected-torch-version", FROZEN_TORCH_VERSION, "--expected-torch-root", str(FROZEN_TORCH_ROOT), "--output", str(baseline_pretest)],
-        cwd=run_root,
-        log=run_root / "logs" / "07-pretest-baseline-identity.log",
-        env=clean_env(baseline_python),
-        output=baseline_pretest,
-    )
-    runtime_status = validate_runtime_identities(
-        status,
-        candidate_identity,
-        baseline_identity,
-        candidate_returncode=candidate_rc,
-        baseline_returncode=baseline_rc,
+    runtime_status = runtime_identity_gate(
+        args, status, output_name="RUNTIME_IDENTITY_STATUS.json", log_prefix="pretest"
     )
     runtime_status_path = run_root / "results" / "RUNTIME_IDENTITY_STATUS.json"
-    runtime_status_path.write_text(json.dumps(runtime_status, indent=2) + "\n")
     if runtime_status["status"] != "PASS":
         raise RuntimeError(runtime_status["status"])
     runtime_status["workers_started"] = True
@@ -391,27 +443,228 @@ def test(args) -> None:
     run([str(baseline_python), "-s", str(CONTEST / "scripts" / "compare.py"), "--baseline", str(baseline_out / "efs.npz"), "--candidate", str(candidate_out / "efs.npz"), "--config", str(CONFIG), "--output", str(smoke_status)], cwd=run_root, log=run_root / "logs" / "10-compare.log", env=clean_env(baseline_python))
 
 
-def unsupported(command: str) -> None:
-    raise RuntimeError(f"{command} is intentionally outside A-D and is not implemented in this batch")
+def benchmark(args) -> None:
+    config, run_root, model, structure = resolve_inputs(args)
+    current = source_identity()
+    build_status = json.loads((run_root / "results" / "BUILD_STATUS.json").read_text())
+    smoke_status = json.loads((run_root / "results" / "SMOKE_STATUS.json").read_text())
+    if build_status.get("status") != "PASS" or not same_source(build_status.get("source", {}), current):
+        raise RuntimeError("benchmark source identity does not match successful build")
+    if smoke_status.get("status") != "PASS":
+        raise RuntimeError("benchmark requires a passing public smoke test")
+    pre = runtime_identity_gate(
+        args, build_status, output_name="BENCHMARK_RUNTIME_IDENTITY_PRE.json",
+        log_prefix="benchmark-pre",
+    )
+    if pre["status"] != "PASS":
+        raise RuntimeError(pre["status"])
+    benchmark_root = run_root / "results" / "public-benchmark"
+    if benchmark_root.exists():
+        raise RuntimeError(f"benchmark output already exists: {benchmark_root}")
+    baseline_python = Path(args.baseline_python or config["baseline_python"])
+    candidate = Path(build_status["candidate_python"])
+    run(
+        [str(baseline_python), "-s", str(BENCHMARK_RUNNER),
+         "--output-root", str(benchmark_root), "--baseline-python", str(baseline_python),
+         "--candidate-python", str(candidate), "--worker", str(BENCHMARK_WORKER),
+         "--model", str(model), "--structure", str(structure), "--config", str(CONFIG)],
+        cwd=run_root, log=run_root / "logs" / "benchmark.log", env=clean_env(baseline_python),
+    )
+    benchmark_status = json.loads((benchmark_root / "BENCHMARK_STATUS.json").read_text())
+    if benchmark_status.get("status") != "PASS":
+        raise RuntimeError(str(benchmark_status.get("status")))
+    post = runtime_identity_gate(
+        args, build_status, output_name="BENCHMARK_RUNTIME_IDENTITY_POST.json",
+        log_prefix="benchmark-post",
+    )
+    if post["status"] != "PASS":
+        raise RuntimeError(post["status"])
+    after = source_identity()
+    if not same_source(current, after):
+        raise RuntimeError("candidate source commit/tree changed during benchmark")
+    aggregate = json.loads((benchmark_root / "result.json").read_text())
+    pair_manifests = {}
+    for pair_dir in sorted(benchmark_root.glob("Pair*")):
+        pair_manifests[pair_dir.name] = {
+            "input_manifest": sha256(pair_dir / "input-manifest.json"),
+            "reference_manifest": sha256(pair_dir / "reference-manifest.json"),
+        }
+    starter_commit = git(["rev-parse", f"{args.starter_ref}^{{commit}}"])
+    binding = {
+        "schema_version": "dpa4c-ppu-contest.measurement-binding.v1",
+        "status": "PASS", "score_type": "public_self_test", "verified": False,
+        "starter": {"ref": args.starter_ref, "resolved_commit": starter_commit},
+        "source": after,
+        "tracked_candidate_manifest": build_status["tracked_candidate_manifest"],
+        "build": {
+            "command": build_status["build_command"],
+            "configuration": build_status["build_configuration"],
+            "candidate_prefix": build_status["candidate_prefix"],
+            "candidate_python": build_status["candidate_python"],
+            "wheel": build_status["wheel"],
+        },
+        "runtime": {
+            "candidate": post["candidate"]["identity"],
+            "baseline": post["baseline"]["identity"],
+        },
+        "tools": {
+            "runner": {"path": str(BENCHMARK_RUNNER), "sha256": sha256(BENCHMARK_RUNNER)},
+            "worker": {"path": str(BENCHMARK_WORKER), "sha256": sha256(BENCHMARK_WORKER)},
+            "validator": {"path": str(BENCHMARK_RUNNER), "sha256": sha256(BENCHMARK_RUNNER)},
+            "smoke_validator": {"path": str(CONTEST / "scripts" / "compare.py"),
+                                "sha256": sha256(CONTEST / "scripts" / "compare.py")},
+        },
+        "assets": build_status["assets"],
+        "protocol": {"version": "dpa4c-ppu-contest.public-benchmark.v1",
+                     "warmup": 20, "measured": 500, "pairs": 3,
+                     "order": ["AB", "BA", "AB"]},
+        "pair_manifests": pair_manifests,
+        "result": {"path": str(benchmark_root / "result.json"),
+                   "sha256": sha256(benchmark_root / "result.json"),
+                   "paired_median_speedup": aggregate["paired_median_speedup"]},
+        "formal_performance": "NOT_RUN_BY_SCOPE",
+    }
+    binding["output_artifacts"] = {
+        str(path.relative_to(benchmark_root)): sha256(path)
+        for path in sorted(benchmark_root.rglob("*")) if path.is_file()
+    }
+    (benchmark_root / "measurement-binding.json").write_text(json.dumps(binding, indent=2) + "\n")
+
+
+def changed_files(repo: Path, starter: str, candidate: str) -> list[str]:
+    output = subprocess.check_output(
+        ["git", "-C", str(repo), "diff", "--name-only", "-z", starter, candidate]
+    )
+    return [name.decode() for name in output.split(b"\0") if name]
+
+
+def reject_binary_implementation_files(paths: list[str]) -> None:
+    rejected = [path for path in paths if Path(path).suffix.lower() in BINARY_IMPLEMENTATION_SUFFIXES]
+    if rejected:
+        raise RuntimeError(f"binary implementation artifacts are prohibited: {rejected}")
+
+
+def make_patch(repo: Path, starter: str, candidate: str, output: Path) -> dict[str, object]:
+    files = changed_files(repo, starter, candidate)
+    reject_binary_implementation_files(files)
+    patch = subprocess.check_output(
+        ["git", "-C", str(repo), "diff", "--binary", "--full-index", starter, candidate]
+    )
+    if not patch:
+        raise RuntimeError("candidate patch is empty")
+    output.write_bytes(patch)
+    with tempfile.TemporaryDirectory(prefix="dpa4c-patch-check-") as directory:
+        checkout = Path(directory) / "checkout"
+        subprocess.run(["git", "clone", "--quiet", "--no-hardlinks", str(repo), str(checkout)], check=True)
+        subprocess.run(["git", "-C", str(checkout), "checkout", "--quiet", starter], check=True)
+        subprocess.run(["git", "-C", str(checkout), "apply", "--binary", "--index", str(output)], check=True)
+        reconstructed_tree = subprocess.check_output(
+            ["git", "-C", str(checkout), "write-tree"], text=True
+        ).strip()
+    candidate_tree = subprocess.check_output(
+        ["git", "-C", str(repo), "rev-parse", f"{candidate}^{{tree}}"], text=True
+    ).strip()
+    if reconstructed_tree != candidate_tree:
+        raise RuntimeError(f"patch reconstructs {reconstructed_tree}, expected {candidate_tree}")
+    return {"changed_files": files, "sha256": sha256(output),
+            "reconstructed_tree": reconstructed_tree}
+
+
+def package(args) -> None:
+    _, run_root, _, _ = resolve_inputs(args)
+    current = source_identity()
+    benchmark_root = run_root / "results" / "public-benchmark"
+    benchmark_status = json.loads((benchmark_root / "BENCHMARK_STATUS.json").read_text())
+    binding = json.loads((benchmark_root / "measurement-binding.json").read_text())
+    starter = git(["rev-parse", f"{args.starter_ref}^{{commit}}"])
+    validate_package_gate(benchmark_status, binding, current, args.starter_ref, starter)
+    output = run_root / "submission"
+    if output.exists():
+        raise RuntimeError(f"submission output already exists: {output}")
+    output.mkdir(parents=True)
+    patch_info = make_patch(ROOT, starter, current["commit"], output / "candidate.patch")
+    for name in ("result.json", "repeats.json", "measurement-binding.json"):
+        shutil.copy2(benchmark_root / name, output / name)
+    image = {"schema_version": "dpa4c-ppu-contest.image.v1", "status": "NOT_RUN",
+             "reason": "image is outside the public source submission flow"}
+    (output / "image.json").write_text(json.dumps(image, indent=2) + "\n")
+    changelog = git(["log", "--format=%h %s", f"{starter}..{current['commit']}"])
+    (output / "CHANGELOG.md").write_text(
+        "# Candidate changes\n\n" + (changelog or "No commit messages.\n") + "\n"
+    )
+    manifest = {
+        "schema_version": "dpa4c-ppu-contest.submission.v1", "status": "PASS",
+        "starter": {"ref": args.starter_ref, "resolved_commit": starter},
+        "candidate": current, "patch": patch_info,
+        "score_type": "public_self_test", "verified": False,
+        "files": {}, "formal_performance": "NOT_RUN_BY_SCOPE",
+    }
+    for path in sorted(output.iterdir()):
+        if path.name not in {"submission-manifest.json", "SHA256SUMS"}:
+            manifest["files"][path.name] = sha256(path)
+    (output / "submission-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    payloads = sorted(path for path in output.iterdir() if path.name != "SHA256SUMS")
+    (output / "SHA256SUMS").write_text(
+        "".join(f"{sha256(path)}  {path.name}\n" for path in payloads)
+    )
+    expected = {"candidate.patch", "result.json", "repeats.json",
+                "measurement-binding.json", "submission-manifest.json", "image.json",
+                "CHANGELOG.md", "SHA256SUMS"}
+    if {path.name for path in output.iterdir()} != expected:
+        raise RuntimeError("submission output set differs from fixed contract")
+
+
+def image_status(args) -> None:
+    _, run_root, _, _ = resolve_inputs(args)
+    target = run_root / "results" / "IMAGE_STATUS.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({
+        "schema_version": "dpa4c-ppu-contest.image-command.v1", "status": "NOT_RUN",
+        "reason": "controlled placeholder; this tool does not call Bohrium or build images",
+    }, indent=2) + "\n")
+
+
+def validate_package_gate(
+    benchmark_status: dict[str, object], binding: dict[str, object],
+    current: dict[str, str], starter_ref: str, starter_commit: str,
+) -> None:
+    if benchmark_status.get("status") != "PASS" or binding.get("status") != "PASS":
+        raise RuntimeError("package requires a passing public benchmark and binding")
+    if not same_source(binding.get("source", {}), current):
+        raise RuntimeError("measured commit/tree differs from current candidate")
+    if binding.get("starter") != {"ref": starter_ref, "resolved_commit": starter_commit}:
+        raise RuntimeError("starter ref differs from measured binding")
+
+
+def execute_command(args) -> None:
+    if args.command == "build":
+        build(args)
+    elif args.command == "test":
+        test(args)
+    elif args.command == "benchmark":
+        benchmark(args)
+    elif args.command == "package":
+        package(args)
+    elif args.command == "image":
+        image_status(args)
+    elif args.command == "all":
+        build(args)
+        test(args)
+        benchmark(args)
+        package(args)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("build", "test", "package", "image", "all"))
+    parser = argparse.ArgumentParser(description="DPA4C PPU public contestant source flow")
+    parser.add_argument("command", choices=("build", "test", "benchmark", "package", "all", "image"))
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--assets-root", type=Path, required=True)
     parser.add_argument("--baseline-python")
+    parser.add_argument("--starter-ref", default=DEFAULT_STARTER_REF,
+                        help="explicit immutable starter tag/commit used by benchmark binding and package")
     args = parser.parse_args()
     try:
-        if args.command == "build":
-            build(args)
-        elif args.command == "test":
-            test(args)
-        elif args.command == "all":
-            build(args)
-            test(args)
-        else:
-            unsupported(args.command)
+        execute_command(args)
         print(json.dumps({"status": "PASS", "command": args.command, "run_root": str(args.run_root.resolve()), "formal_performance": "NOT_RUN_BY_SCOPE"}))
         return 0
     except Exception as exc:
