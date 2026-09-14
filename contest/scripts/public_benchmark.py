@@ -50,6 +50,20 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
 
 
+def load_tolerance(path: Path) -> dict[str, object]:
+    config = json.loads(path.read_text())
+    if config.get("schema_version") != "dpa4c-ppu-contest.benchmark-tolerance.v1":
+        raise RuntimeError("unsupported benchmark tolerance schema")
+    fields = config.get("fields", {})
+    expected = {"energy_eV", "forces_eV_per_A", "virial_eV", "stress_eV_per_A3"}
+    if set(fields) != expected:
+        raise RuntimeError("benchmark tolerance fields are incomplete")
+    for name, values in fields.items():
+        if float(values["atol"]) < 0.0 or float(values["rtol"]) < 0.0:
+            raise RuntimeError(f"negative benchmark tolerance for {name}")
+    return config
+
+
 def send(stream, value: object) -> None:
     payload = pickle.dumps(value, protocol=5)
     stream.write(struct.pack(">Q", len(payload)))
@@ -156,7 +170,8 @@ def _per_frame_max(value: np.ndarray) -> np.ndarray:
 
 
 def validate_output(actual_path: Path, reference_path: Path, output: Path,
-                    route: str, pair_id: str, tolerances: dict[str, float]) -> dict[str, object]:
+                    route: str, pair_id: str, tolerance: dict[str, object],
+                    tolerance_path: Path) -> dict[str, object]:
     actual = np.load(actual_path)
     reference = np.load(reference_path)
     fields = {
@@ -173,18 +188,24 @@ def validate_output(actual_path: Path, reference_path: Path, output: Path,
             raise RouteFailure(route, f"{route} {key} shape/dtype mismatch")
         errors = _per_frame_max(a.astype(np.float64) - b.astype(np.float64))
         finite = bool(np.isfinite(a).all())
-        atol = float(tolerances[tolerance_name])
-        field_pass = finite and bool(np.all(errors <= atol))
+        values = tolerance["fields"][tolerance_name]
+        atol, rtol = float(values["atol"]), float(values["rtol"])
+        allowed = atol + rtol * np.abs(b.astype(np.float64))
+        field_pass = finite and bool(np.all(np.abs(a.astype(np.float64) - b.astype(np.float64)) <= allowed))
         passed &= field_pass
         checks[key] = {"shape": list(a.shape), "dtype": str(a.dtype), "finite": finite,
                        "max_abs": float(np.max(errors)),
-                       "per_frame_max_abs": errors.tolist(), "atol": atol,
+                       "per_frame_max_abs": errors.tolist(), "atol": atol, "rtol": rtol,
                        "status": "PASS" if field_pass else "FAIL"}
     status = "PASS" if passed else (
         "BENCHMARK_INVALID" if route == "baseline" else "CANDIDATE_INVALID")
     result = {"schema_version": "dpa4c-ppu-contest.correctness.v1",
               "pair_id": pair_id, "route": route, "status": status,
-              "rtol": 0.0, "checks": checks,
+              "tolerance": {"path": str(tolerance_path.resolve()),
+                            "sha256": sha256(tolerance_path),
+                            "tolerance_id": tolerance["tolerance_id"],
+                            "fields": tolerance["fields"]},
+              "checks": checks,
               "actual_sha256": sha256(actual_path),
               "reference_sha256": sha256(reference_path)}
     write_json(output, result)
@@ -212,10 +233,13 @@ def run_benchmark(args) -> dict[str, object]:
               "warmup": args.warmup, "measured": args.measured,
               "formal_performance": "NOT_RUN_BY_SCOPE"}
     write_json(status_path, status)
-    config = json.loads(args.config.read_text())
-    tolerances = config["tolerances"]
-    if float(tolerances["rtol"]) != 0.0:
-        raise RuntimeError("public benchmark requires rtol=0")
+    tolerance = load_tolerance(args.benchmark_tolerance)
+    tolerance_identity = {"path": str(args.benchmark_tolerance.resolve()),
+                          "sha256": sha256(args.benchmark_tolerance),
+                          "tolerance_id": tolerance["tolerance_id"],
+                          "fields": tolerance["fields"]}
+    status["benchmark_tolerance"] = tolerance_identity
+    write_json(status_path, status)
     pairs = generate_sequences(args.structure, warmup=args.warmup, measured=args.measured)
     env = dict(os.environ)
     for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX",
@@ -254,7 +278,7 @@ def run_benchmark(args) -> dict[str, object]:
                                    warmup=args.warmup, measured=args.measured, env=env)
             correctness = validate_output(route_path, reference_path,
                                           pair_dir / f"{route}.correctness.json",
-                                          route, pair_id, tolerances)
+                                          route, pair_id, tolerance, args.benchmark_tolerance)
             write_latency_csv(pair_dir / f"{route}.latency.csv", route_path, pair_id,
                               route, pair_result["order"])
             record = {"pair_id": pair_id, "order": pair_result["order"], "route": route,
@@ -296,7 +320,7 @@ def run_benchmark(args) -> dict[str, object]:
                  "status": final_status, "score_type": "public_self_test", "verified": False,
                  "paired_median_speedup": (
                      float(statistics.median(speedups)) if final_status == "PASS" else None
-                 ),
+                 ), "benchmark_tolerance": tolerance_identity,
                  "pair_speedups_candidate_over_baseline": speedups, "pairs": pair_records}
     write_json(root / "formal-aggregate.json", aggregate)
     write_json(root / "repeats.json", {"schema_version": PROTOCOL, "routes": records})
@@ -326,7 +350,7 @@ def main() -> int:
     parser.add_argument("--worker", type=Path, required=True)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--structure", type=Path, required=True)
-    parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--benchmark-tolerance", type=Path, required=True)
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--measured", type=int, default=500)
     args = parser.parse_args()

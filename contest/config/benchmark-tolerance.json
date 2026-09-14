@@ -1,0 +1,29 @@
+{
+  "schema_version": "dpa4c-ppu-contest.benchmark-tolerance.v1",
+  "tolerance_id": "nano-1024-fp32-public-dynamic-baseline-v1",
+  "scope": "Public self-test only: fixed Nano model, periodic 1024-atom structure, FP32, 20 warmup plus 500 measured dynamic frames",
+  "interpretation": "Baseline dynamic repeatability envelope; not a scientific accuracy tolerance and not transferable to other models, sizes, precisions, or protocols",
+  "derivation": "max(anchor_atol, 1.25 * max_abs_baseline_dynamic) over the frozen baseline-only 500-measured-frame study",
+  "source": {
+    "kind": "frozen baseline-only dynamic tolerance record",
+    "sha256": "ee11c09f2912e568adce31d5358dc54e3dcbe2e430a925e25d1626ca186b1431"
+  },
+  "fields": {
+    "energy_eV": {
+      "atol": 0.00039577481061314757,
+      "rtol": 1.4210854715202004e-14
+    },
+    "forces_eV_per_A": {
+      "atol": 0.00005,
+      "rtol": 1.4210854715202004e-14
+    },
+    "virial_eV": {
+      "atol": 0.0006802242146053405,
+      "rtol": 1.4210854715202004e-14
+    },
+    "stress_eV_per_A3": {
+      "atol": 1e-7,
+      "rtol": 1.4210854715202004e-14
+    }
+  }
+}

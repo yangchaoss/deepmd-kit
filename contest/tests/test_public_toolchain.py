@@ -68,14 +68,71 @@ class PublicBenchmarkTest(unittest.TestCase):
             broken = dict(fields)
             broken["measured_energy_eV"] = np.ones(2, dtype=np.float64)
             np.savez(actual, **broken)
-            tolerances = {"energy_eV": 3.4e-4, "forces_eV_per_A": 5.5e-5,
-                          "virial_eV": 5e-4, "stress_eV_per_A3": 1e-7}
+            tolerance_path = Path(__file__).parents[1] / "config/benchmark-tolerance.json"
+            tolerance = benchmark.load_tolerance(tolerance_path)
             baseline = benchmark.validate_output(actual, reference, root / "b.json",
-                                                  "baseline", "Pair1", tolerances)
+                                                  "baseline", "Pair1", tolerance,
+                                                  tolerance_path)
             candidate = benchmark.validate_output(actual, reference, root / "c.json",
-                                                   "candidate", "Pair1", tolerances)
+                                                   "candidate", "Pair1", tolerance,
+                                                   tolerance_path)
             self.assertEqual(baseline["status"], "BENCHMARK_INVALID")
             self.assertEqual(candidate["status"], "CANDIDATE_INVALID")
+
+    def test_smoke_and_benchmark_tolerances_are_separate(self):
+        runtime = json.loads((Path(__file__).parents[1] / "config/runtime.json").read_text())
+        dynamic = benchmark.load_tolerance(
+            Path(__file__).parents[1] / "config/benchmark-tolerance.json"
+        )
+        self.assertEqual(runtime["tolerances"], {
+            "rtol": 0.0, "energy_eV": 0.00034, "forces_eV_per_A": 0.000055,
+            "virial_eV": 0.0005, "stress_eV_per_A3": 1e-7,
+        })
+        self.assertEqual(dynamic["fields"]["energy_eV"]["atol"],
+                         0.00039577481061314757)
+        self.assertNotEqual(runtime["tolerances"]["energy_eV"],
+                            dynamic["fields"]["energy_eV"]["atol"])
+
+    def test_rtol_formula_uses_reference_magnitude(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tolerance_path = Path(__file__).parents[1] / "config/benchmark-tolerance.json"
+            tolerance = benchmark.load_tolerance(tolerance_path)
+            atol = tolerance["fields"]["energy_eV"]["atol"]
+            rtol = tolerance["fields"]["energy_eV"]["rtol"]
+            reference_fields = {
+                "measured_energy_eV": np.asarray([1.0e10], dtype=np.float64),
+                "measured_forces": np.zeros((1, 1, 3), dtype=np.float64),
+                "measured_virial": np.zeros((1, 3, 3), dtype=np.float64),
+                "measured_stress": np.zeros((1, 6), dtype=np.float64),
+            }
+            np.savez(root / "reference.npz", **reference_fields)
+            inside = dict(reference_fields)
+            inside["measured_energy_eV"] = np.asarray(
+                [1.0e10 + 0.99 * (atol + rtol * 1.0e10)], dtype=np.float64
+            )
+            np.savez(root / "inside.npz", **inside)
+            result = benchmark.validate_output(root / "inside.npz", root / "reference.npz",
+                                               root / "inside.json", "candidate", "Pair1",
+                                               tolerance, tolerance_path)
+            self.assertEqual(result["status"], "PASS")
+            outside = dict(reference_fields)
+            outside["measured_energy_eV"] = np.asarray(
+                [1.0e10 + 1.01 * (atol + rtol * 1.0e10)], dtype=np.float64
+            )
+            np.savez(root / "outside.npz", **outside)
+            result = benchmark.validate_output(root / "outside.npz", root / "reference.npz",
+                                               root / "outside.json", "candidate", "Pair1",
+                                               tolerance, tolerance_path)
+            self.assertEqual(result["status"], "CANDIDATE_INVALID")
+
+    def test_binding_tolerance_identity(self):
+        identity = flow.benchmark_tolerance_identity()
+        self.assertEqual(identity["tolerance_id"],
+                         "nano-1024-fp32-public-dynamic-baseline-v1")
+        self.assertEqual(identity["sha256"], flow.sha256(flow.BENCHMARK_TOLERANCE))
+        self.assertEqual(identity["fields"]["virial_eV"]["atol"],
+                         0.0006802242146053405)
 
     def test_measured_tree_drift_is_rejected(self):
         status = {"status": "PASS"}

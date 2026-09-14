@@ -18,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CONTEST = ROOT / "contest"
 CONFIG = CONTEST / "config" / "runtime.json"
+BENCHMARK_TOLERANCE = CONTEST / "config" / "benchmark-tolerance.json"
 BUILD_REQUIREMENTS = CONTEST / "config" / "build-requirements.txt"
 CANDIDATE_MANIFEST = CONTEST / "config" / "submission.json"
 FROZEN_TORCH_VERSION = "2.9.0+ali.10.ppu2.1.0.cu130"
@@ -92,6 +93,20 @@ def tracked_manifest_sha() -> str:
         ["git", "-C", str(ROOT), "ls-files", "-s", "-z"]
     )
     return hashlib.sha256(payload).hexdigest()
+
+
+def benchmark_tolerance_identity() -> dict[str, object]:
+    config = json.loads(BENCHMARK_TOLERANCE.read_text())
+    return {
+        "path": str(BENCHMARK_TOLERANCE.relative_to(ROOT)),
+        "sha256": sha256(BENCHMARK_TOLERANCE),
+        "tolerance_id": config["tolerance_id"],
+        "fields": config["fields"],
+        "scope": config["scope"],
+        "interpretation": config["interpretation"],
+        "derivation": config["derivation"],
+        "source": config["source"],
+    }
 
 
 def source_identity() -> dict[str, str]:
@@ -467,7 +482,8 @@ def benchmark(args) -> None:
         [str(baseline_python), "-s", str(BENCHMARK_RUNNER),
          "--output-root", str(benchmark_root), "--baseline-python", str(baseline_python),
          "--candidate-python", str(candidate), "--worker", str(BENCHMARK_WORKER),
-         "--model", str(model), "--structure", str(structure), "--config", str(CONFIG)],
+         "--model", str(model), "--structure", str(structure),
+         "--benchmark-tolerance", str(BENCHMARK_TOLERANCE)],
         cwd=run_root, log=run_root / "logs" / "benchmark.log", env=clean_env(baseline_python),
     )
     benchmark_status = json.loads((benchmark_root / "BENCHMARK_STATUS.json").read_text())
@@ -515,6 +531,7 @@ def benchmark(args) -> None:
                                 "sha256": sha256(CONTEST / "scripts" / "compare.py")},
         },
         "assets": build_status["assets"],
+        "benchmark_tolerance": benchmark_tolerance_identity(),
         "protocol": {"version": "dpa4c-ppu-contest.public-benchmark.v1",
                      "warmup": 20, "measured": 500, "pairs": 3,
                      "order": ["AB", "BA", "AB"]},
