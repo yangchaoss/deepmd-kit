@@ -106,16 +106,15 @@ availability. The image contains no source, model, structure, candidate result,
 private evaluator or credential.
 
 For a self-contained image, `image/build_embedded_dockerfile.py` generates a
-context-free Dockerfile containing a real shallow Git checkout of the fixed rc1
-candidate plus its frozen-base objects. It verifies the original commit and
-tree identities without contacting GitHub during the Bohrium image build.
+size-bounded Dockerfile chain containing a real sparse Git checkout of the
+fixed rc1 candidate plus its frozen-base history. Each stage stays below
+Bohrium's 64 KiB Dockerfile limit; the final stage verifies commit, tree,
+patch SHA and clean status without contacting GitHub during the build.
 
-Inside that image, fetch the public source and run:
+Inside the self-contained image, use the embedded public source and run:
 
 ```bash
-git clone --branch dpa4c-ppu-nano-contestant-kit-v1.0.0-rc1 --depth 1 \
-  https://github.com/yangchaoss/deepmd-kit.git
-cd deepmd-kit
+cd /opt/dpa4c-contestant-kit
 test "$(git rev-parse HEAD)" = 8b289e73cf0bfb1ff16f3ae3a30b88dc2cbb60e2
 
 examples/ppu/dpa4c_nano_rc1/scripts/contestant.sh all \
