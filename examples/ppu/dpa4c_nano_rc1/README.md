@@ -97,6 +97,23 @@ runs the private frozen paired protocol before assigning any final score.
 Formal seeds, reference arrays, credentials and the formal orchestrator stay
 in the separate private evaluator repository.
 
+## Runtime image recipe
+
+`image/Dockerfile` builds from the pinned public PPU runtime and fetches this
+public repository at the fixed rc1 tag during the image build. It verifies the
+full commit before exposing `dpa4c-contestant-flow` as a convenience symlink to
+the same Git-tracked `contestant.sh`. The image contains no model, structure,
+candidate result, private evaluator or credential.
+
+Inside that image, run:
+
+```bash
+dpa4c-contestant-flow all \
+  --model /external/DPA4C-Nano-OMat24-v20260819.pt \
+  --structure /external/common-structure-1024.extxyz \
+  --work-root /workspace/dpa4c-nano-run
+```
+
 ## Troubleshooting
 
 - `deepmd.lib` missing: do not add the repository root to `PYTHONPATH`; rerun
