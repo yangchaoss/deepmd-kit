@@ -44,7 +44,7 @@ def main() -> int:
     parser.add_argument("--structure", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    args.output.parent.mkdir(parents=True, exist_ok=False)
+    args.output.mkdir(parents=True, exist_ok=False)
     result: dict[str, object] = {"status": "FAIL", "mode": args.mode}
     try:
         os.environ.setdefault("DP_COMPILE_INFER", "0")
