@@ -99,16 +99,21 @@ in the separate private evaluator repository.
 
 ## Runtime image recipe
 
-`image/Dockerfile` builds from the pinned public PPU runtime and fetches this
-public repository at the fixed rc1 tag during the image build. It verifies the
-full commit before exposing `dpa4c-contestant-flow` as a convenience symlink to
-the same Git-tracked `contestant.sh`. The image contains no model, structure,
-candidate result, private evaluator or credential.
+`image/Dockerfile` builds the pinned PPU SDK/CUDA/Torch runtime. Source remains
+in this public repository and is fetched at the fixed rc1 tag after the sandbox
+starts; this avoids coupling image construction to external Git network
+availability. The image contains no source, model, structure, candidate result,
+private evaluator or credential.
 
-Inside that image, run:
+Inside that image, fetch the public source and run:
 
 ```bash
-dpa4c-contestant-flow all \
+git clone --branch dpa4c-ppu-nano-contestant-kit-v1.0.0-rc1 --depth 1 \
+  https://github.com/yangchaoss/deepmd-kit.git
+cd deepmd-kit
+test "$(git rev-parse HEAD)" = 8b289e73cf0bfb1ff16f3ae3a30b88dc2cbb60e2
+
+examples/ppu/dpa4c_nano_rc1/scripts/contestant.sh all \
   --model /external/DPA4C-Nano-OMat24-v20260819.pt \
   --structure /external/common-structure-1024.extxyz \
   --work-root /workspace/dpa4c-nano-run
