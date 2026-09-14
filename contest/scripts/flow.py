@@ -20,6 +20,7 @@ CONTEST = ROOT / "contest"
 CONFIG = CONTEST / "config" / "runtime.json"
 BENCHMARK_TOLERANCE = CONTEST / "config" / "benchmark-tolerance.json"
 BUILD_REQUIREMENTS = CONTEST / "config" / "build-requirements.txt"
+RUNTIME_REQUIREMENTS = CONTEST / "config" / "runtime-requirements.txt"
 CANDIDATE_MANIFEST = CONTEST / "config" / "submission.json"
 FROZEN_TORCH_VERSION = "2.9.0+ali.10.ppu2.1.0.cu130"
 FROZEN_TORCH_ROOT = Path("/opt/ac2")
@@ -208,6 +209,35 @@ def inspect_build_environment(python: Path, run_root: Path) -> dict[str, object]
     return result
 
 
+def install_runtime_requirements(
+    python: Path, run_root: Path, candidate_prefix: Path
+) -> dict[str, object]:
+    command = [
+        str(python), "-s", "-m", "pip", "install", "--no-deps",
+        "--require-hashes", "-r", str(RUNTIME_REQUIREMENTS),
+    ]
+    run(
+        command,
+        cwd=run_root,
+        log=run_root / "logs" / "04-runtime-requirements.log",
+        env=clean_env(python),
+    )
+    packages = inspect_python_packages(python, run_root, (("ase", "ase"),))
+    ase = packages["ase"]
+    if ase["version"] != "3.29.0":
+        raise RuntimeError(f"unexpected ASE version: {ase['version']}")
+    try:
+        Path(ase["path"]).resolve().relative_to(candidate_prefix.resolve())
+    except ValueError as exc:
+        raise RuntimeError(f"ASE escaped candidate prefix: {ase['path']}") from exc
+    return {
+        "path": str(RUNTIME_REQUIREMENTS.relative_to(ROOT)),
+        "sha256": sha256(RUNTIME_REQUIREMENTS),
+        "install_command": command,
+        "packages": packages,
+    }
+
+
 def stable_identity(identity: dict[str, object], *, candidate: bool) -> dict[str, object]:
     fields = ("deepmd", "deepmd_lib", "deepmd_elfs", "torch")
     result = {field: identity.get(field) for field in fields}
@@ -321,6 +351,7 @@ def build(args) -> None:
     config, run_root, model, structure = resolve_inputs(args)
     identity = source_identity()
     git(["ls-files", "--error-unmatch", str(CANDIDATE_MANIFEST.relative_to(ROOT))])
+    git(["ls-files", "--error-unmatch", str(RUNTIME_REQUIREMENTS.relative_to(ROOT))])
     for name in ("build", "install", "logs", "results"):
         (run_root / name).mkdir(parents=True, exist_ok=True)
     baseline_python = Path(args.baseline_python or config["baseline_python"])
@@ -380,6 +411,7 @@ def build(args) -> None:
             raise RuntimeError("wheel RECORD does not bind required deepmd.lib files")
     run([str(python), "-s", "-m", "pip", "install", "--no-deps", "--force-reinstall", str(wheel)], cwd=run_root, log=run_root / "logs" / "03-install.log", env=clean_env(python))
     site = site_packages(python, run_root)
+    runtime_requirements = install_runtime_requirements(python, run_root, site)
     entry = site / "dpa4c_candidate"
     entry.mkdir(exist_ok=False)
     for source in sorted((CONTEST / "candidate").glob("*.py")):
@@ -399,6 +431,7 @@ def build(args) -> None:
             "requirements": str(BUILD_REQUIREMENTS),
             "requirements_sha256": sha256(BUILD_REQUIREMENTS),
         },
+        "runtime_requirements": runtime_requirements,
         "wheel": {"path": str(wheel), "sha256": sha256(wheel), "size_bytes": wheel.stat().st_size},
         "candidate_python": str(python),
         "candidate_prefix": str(site),
@@ -411,14 +444,14 @@ def build(args) -> None:
         "assets": {"model": {"path": str(model), "sha256": sha256(model)}, "structure": {"path": str(structure), "sha256": sha256(structure)}},
         "formal_performance": "NOT_RUN_BY_SCOPE",
     }
-    run([str(python), "-s", str(CONTEST / "scripts" / "identity.py"), "--expected-prefix", str(site), "--candidate-entry", "--expected-torch-version", FROZEN_TORCH_VERSION, "--expected-torch-root", str(FROZEN_TORCH_ROOT), "--output", str(run_root / "results" / "candidate-identity.json")], cwd=run_root, log=run_root / "logs" / "04-candidate-identity.log", env=clean_env(python))
+    run([str(python), "-s", str(CONTEST / "scripts" / "identity.py"), "--expected-prefix", str(site), "--candidate-entry", "--expected-torch-version", FROZEN_TORCH_VERSION, "--expected-torch-root", str(FROZEN_TORCH_ROOT), "--output", str(run_root / "results" / "candidate-identity.json")], cwd=run_root, log=run_root / "logs" / "05-candidate-identity.log", env=clean_env(python))
     candidate_identity = json.loads(
         (run_root / "results" / "candidate-identity.json").read_text()
     )
     if candidate_identity["torch"] != build_environment["torch"]:
         raise RuntimeError("candidate runtime Torch identity differs from build-time Torch")
     baseline_prefix = site_packages(baseline_python, run_root)
-    run([str(baseline_python), "-s", str(CONTEST / "scripts" / "identity.py"), "--expected-prefix", str(baseline_prefix), "--expected-torch-version", FROZEN_TORCH_VERSION, "--expected-torch-root", str(FROZEN_TORCH_ROOT), "--output", str(run_root / "results" / "baseline-identity.json")], cwd=run_root, log=run_root / "logs" / "05-baseline-identity.log", env=clean_env(baseline_python))
+    run([str(baseline_python), "-s", str(CONTEST / "scripts" / "identity.py"), "--expected-prefix", str(baseline_prefix), "--expected-torch-version", FROZEN_TORCH_VERSION, "--expected-torch-root", str(FROZEN_TORCH_ROOT), "--output", str(run_root / "results" / "baseline-identity.json")], cwd=run_root, log=run_root / "logs" / "06-baseline-identity.log", env=clean_env(baseline_python))
     baseline_identity = json.loads(
         (run_root / "results" / "baseline-identity.json").read_text()
     )

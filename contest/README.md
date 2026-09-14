@@ -11,9 +11,13 @@ accepted only at the frozen SHA-256 values in `config/runtime.json`.
 ```
 
 `build` creates a candidate virtual environment outside the checkout, builds a
-non-editable wheel from the current committed tree, installs the wheel and the
-small candidate session contract, then records baseline/candidate package and
-ELF identities.  Before starting either worker, `test` re-records both runtime
+non-editable wheel from the current committed tree, installs that wheel, then
+installs the tracked, hash-locked candidate runtime requirements from
+`config/runtime-requirements.txt` before any identity check. The build record
+binds the requirements path and SHA-256, exact install command, and resolved ASE
+version and module path inside the candidate environment. It then installs the
+small candidate session contract and records baseline/candidate package and ELF
+identities. Before starting either worker, `test` re-records both runtime
 identities and verifies stable package, ELF, Torch, and candidate-entry bindings
 against `BUILD_STATUS.json`; mismatches fail closed in
 `RUNTIME_IDENTITY_STATUS.json`.  Passing identities then run baseline and

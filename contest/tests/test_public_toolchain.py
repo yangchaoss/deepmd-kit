@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import subprocess
 import tempfile
@@ -41,6 +42,45 @@ class FakeAtoms:
 
 
 class PublicBenchmarkTest(unittest.TestCase):
+    def test_runtime_requirements_are_hash_locked(self):
+        self.assertEqual(
+            flow.RUNTIME_REQUIREMENTS.read_text(),
+            "ase==3.29.0 --hash=sha256:7b9dd103f007810339c24acfee2f6b677c0c48443b21d3c98e52959246cf4ebf\n",
+        )
+
+    def test_runtime_requirements_install_is_bound_and_records_ase(self):
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory)
+            prefix = run_root / "install/candidate-venv/lib/python3.12/site-packages"
+            ase_path = prefix / "ase/__init__.py"
+            python = run_root / "install/candidate-venv/bin/python"
+            with (
+                mock.patch.object(flow, "run") as run,
+                mock.patch.object(
+                    flow,
+                    "inspect_python_packages",
+                    return_value={"ase": {"version": "3.29.0", "path": str(ase_path)}},
+                ),
+            ):
+                identity = flow.install_runtime_requirements(python, run_root, prefix)
+        command = run.call_args.args[0]
+        self.assertEqual(
+            command[-4:],
+            ["--no-deps", "--require-hashes", "-r", str(flow.RUNTIME_REQUIREMENTS)],
+        )
+        self.assertEqual(identity["path"], "contest/config/runtime-requirements.txt")
+        self.assertEqual(identity["sha256"], flow.sha256(flow.RUNTIME_REQUIREMENTS))
+        self.assertEqual(identity["install_command"], command)
+        self.assertEqual(identity["packages"]["ase"]["version"], "3.29.0")
+        self.assertEqual(identity["packages"]["ase"]["path"], str(ase_path))
+
+    def test_build_installs_runtime_requirements_before_identity(self):
+        source = inspect.getsource(flow.build)
+        self.assertLess(
+            source.index("install_runtime_requirements"),
+            source.index("05-candidate-identity.log"),
+        )
+
     def test_three_disjoint_public_pairs_and_order(self):
         with mock.patch.object(benchmark, "load_atoms", return_value=FakeAtoms()):
             pairs = benchmark.generate_sequences(Path("unused"), warmup=2, measured=3)
