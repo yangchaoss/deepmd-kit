@@ -1,4 +1,12 @@
-# DPA4C PPU contestant source flow
+# DPA4C PPU contestant source flow (authoritative)
+
+This file is the only authoritative contestant-facing contract for the Nano
+PPU flow. The starter repository is
+`https://github.com/yangchaoss/deepmd-kit.git`; the immutable starter ref is
+`dpa4c-ppu-nano-starter-v1.0.0-rc1`. Resolve that tag to record the exact
+commit and tree used by a run. Historical files under
+`examples/ppu/dpa4c_nano_rc1/` are compatibility material only and do not
+define a second submission contract.
 
 The organizer calls one tracked entrypoint.  Assets remain external and are
 accepted only at the frozen SHA-256 values in `config/runtime.json`.
@@ -6,8 +14,8 @@ accepted only at the frozen SHA-256 values in `config/runtime.json`.
 ```bash
 ./contest/contest.sh build --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets
 ./contest/contest.sh test  --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets
-./contest/contest.sh benchmark --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref STARTER_TAG_OR_COMMIT
-./contest/contest.sh package --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref STARTER_TAG_OR_COMMIT
+./contest/contest.sh benchmark --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc1
+./contest/contest.sh package --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc1
 ```
 
 `build` creates a candidate virtual environment outside the checkout, builds a
@@ -54,6 +62,11 @@ runner, or validator.
 `all` is exactly `build`, `test`, `benchmark`, then `package`. `image` only
 writes a controlled `NOT_RUN` status and never contacts Bohrium. No command
 creates, stops, deletes, or restarts a sandbox, pushes Git, builds an image, or
-runs a private formal benchmark. Until the release tag exists, pass an explicit
-immutable `--starter-ref`; the default future release tag is
-`dpa4c-ppu-nano-starter-v1.0.0-rc1`.
+runs a private formal benchmark. Historical commits may be selected only with
+an explicit immutable `--starter-ref`; the default is the frozen starter tag
+declared above.
+
+The runtime image recipe is a separate, later release step. It must clone this
+public repository at the immutable starter tag during image construction; the
+candidate source, model, structure, results and private evaluator are not image
+acceptance evidence.
