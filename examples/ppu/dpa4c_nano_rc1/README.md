@@ -24,7 +24,7 @@ reference outputs, compiled objects and prior results are never stored here.
 ```bash
 git clone https://github.com/yangchaoss/deepmd-kit.git
 cd deepmd-kit
-git checkout <fixed-contestant-kit-commit>
+git checkout dpa4c-ppu-nano-contestant-kit-v1.0.0-rc1
 
 examples/ppu/dpa4c_nano_rc1/scripts/contestant.sh all \
   --model /external/DPA4C-Nano-OMat24-v20260819.pt \
