@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import traceback
 from pathlib import Path
 
 import numpy as np
@@ -122,7 +123,13 @@ def main() -> int:
             }
         )
     except Exception as exc:
-        result.update({"error_type": type(exc).__name__, "error": str(exc)})
+        result.update(
+            {
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "traceback": traceback.format_exc(),
+            }
+        )
     (args.output / "worker.json").write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
     print(json.dumps(result, indent=2, ensure_ascii=False))
     return 0 if result["status"] == "PASS" else 2
