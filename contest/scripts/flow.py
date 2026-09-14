@@ -49,6 +49,8 @@ def clean_env(python: Path) -> dict[str, str]:
             "PATH": str(python.absolute().parent) + os.pathsep + env.get("PATH", ""),
             "PIP_NO_CACHE_DIR": "1",
             "CMAKE_BUILD_PARALLEL_LEVEL": "8",
+            "PPU_SDK": "/usr/local/PPU_SDK",
+            "CUDA_HOME": "/usr/local/PPU_SDK/CUDA_SDK",
         }
     )
     return env
