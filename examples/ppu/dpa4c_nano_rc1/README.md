@@ -105,6 +105,11 @@ starts; this avoids coupling image construction to external Git network
 availability. The image contains no source, model, structure, candidate result,
 private evaluator or credential.
 
+For a self-contained image, `image/build_embedded_dockerfile.py` generates a
+context-free Dockerfile containing a real shallow Git checkout of the fixed rc1
+candidate plus its frozen-base objects. It verifies the original commit and
+tree identities without contacting GitHub during the Bohrium image build.
+
 Inside that image, fetch the public source and run:
 
 ```bash
