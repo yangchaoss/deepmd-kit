@@ -1,70 +1,103 @@
-# DPA4C PPU Nano Golden Prototype v1.0-rc1
+# DPA4C PPU Nano contestant kit
 
-This directory freezes the source side of the private PPU Nano evaluation
-prototype. It is an evaluation-infrastructure calibration payload, not a
-restriction on the implementation boundaries of a future migration contest.
+This tracked kit is the public, reproducible entrypoint for the DPA4C Nano
+CUDA/PPU force-and-virial candidate. A contestant clones the repository at a
+fixed commit, supplies the external model and 1024-atom structure, and writes
+all environments, build products, results and submission files outside Git.
 
-## Frozen identities
+## Environment
 
-- Upstream repository: `https://github.com/deepmodeling/deepmd-kit.git`
-- Upstream source commit: `14a71f13bb840c10d78465f75a00e3a31764a0fd`
-- Backend exercised by the verified model: `deepmd.pt_expt`
-- Model asset: DPA4C Nano checkpoint, external and SHA256-bound
-- Structure asset: fully periodic 1024-atom structure, external and
-  SHA256-bound
-- Precision and outer execution contract: FP32, eager, single PPU
+The supported runtime is the Bohrium PPU template
+`ppu-training-xpu-2604-0908` with:
 
-The model, private input sequence, credentials, PPU SDK, compiled objects and
-performance evidence are deliberately not stored in Git. See
-`source-lock.json` for the verified external asset hashes.
+- `/opt/ac2/bin/python` and its installed `deepmd`, `deepmd.lib`, ASE and Torch;
+- `/usr/local/PPU_SDK/CUDA_SDK/bin/nvcc`;
+- one visible PPU device;
+- model SHA256 `f894ac16adfb7f5030d4fe4e2849db6c608f9c7074badfafb4a50c9b9afed00a`;
+- structure SHA256 `137056e51cf63bd7dabf0508a29959218baf109da0c5e19a3765d11873c891e7`.
 
-## What is frozen here
+The model and structure remain external. Credentials, private seeds,
+reference outputs, compiled objects and prior results are never stored here.
 
-The candidate CUDA source performs the live edge-gradient to force,
-atom-virial and frame-virial assembly used by the DPA4C E/F/S path. The Python
-adapter installs that operator at the current `pt_expt` seam. The tracked
-build, probe and E/F/S scripts reproduce the already demonstrated development
-path without relying on untracked implementation files.
-
-The force/virial seam is only a Golden Candidate payload. A future contestant
-may optimize or replace any part of the DPA4C GPU execution path while keeping
-the external model and E/F/S contract.
-
-## Development replay
-
-Run only inside the approved PPU runtime environment:
+## Clone and run
 
 ```bash
-export PPU_SDK=/usr/local/PPU_SDK
-export CUDA_HOME=/usr/local/PPU_SDK/CUDA_SDK
-export DPA4C_RC1_MODEL=/external/DPA4C-Nano.pt
-export DPA4C_RC1_STRUCTURE=/external/structure-1024.extxyz
-export DPA4C_RC1_WORK_ROOT=/external/work/dpa4c-nano-rc1
-bash examples/ppu/dpa4c_nano_rc1/run_development_probe.sh
+git clone https://github.com/yangchaoss/deepmd-kit.git
+cd deepmd-kit
+git checkout <fixed-contestant-kit-commit>
+
+examples/ppu/dpa4c_nano_rc1/scripts/contestant.sh all \
+  --model /external/DPA4C-Nano-OMat24-v20260819.pt \
+  --structure /external/common-structure-1024.extxyz \
+  --work-root /external/dpa4c-nano-run
 ```
 
-`DPA4C_RC1_WORK_ROOT` must be outside the Git checkout. Build products and
-evidence are written below it, keeping the controlled source tree clean.
-This entry point remains a development probe; it does not run the formal
-20-warmup + 500-measured paired benchmark.
+`--work-root` must be outside the checkout. The command creates one isolated
+candidate venv, compiles and binds the current source, runs the device dispatch
+check, executes a public `1 warmup + 2 measured` E/F/virial/stress smoke,
+computes a clearly labelled non-formal speedup preview, and packages the
+submission.
 
-## Environment gate status
+Individual stages are also available:
 
-The source baseline is frozen by this branch. The candidate-independent
-Frozen PPU Runtime Image build passed as Bohrium Image `156770`, with the image,
-base-image and Dockerfile digests recorded in `source-lock.json`. The first
-fresh-Sandbox requests were rejected before instance creation because the PPU
-cluster was still preparing the new image. Therefore environment build is PASS,
-but boot and device-runtime acceptance remain PENDING.
+```bash
+.../scripts/contestant.sh bootstrap --model MODEL --structure STRUCTURE --work-root WORK
+.../scripts/contestant.sh build     --model MODEL --structure STRUCTURE --work-root WORK
+.../scripts/contestant.sh check     --model MODEL --structure STRUCTURE --work-root WORK
+.../scripts/contestant.sh benchmark --model MODEL --structure STRUCTURE --work-root WORK
+.../scripts/contestant.sh score     --model MODEL --structure STRUCTURE --work-root WORK
+.../scripts/contestant.sh package   --model MODEL --structure STRUCTURE --work-root WORK
+```
 
-The candidate-independent recipe for the first infrastructure gate is tracked
-at `runtime/Dockerfile.minimal-probe`. It verifies the base image, PPU SDK CUDA
-compiler wrapper and frozen PyTorch/CUDA identity during image construction.
-Passing that build is necessary but not sufficient: a fresh PPU Sandbox must
-still boot from the resulting image and pass device/runtime smoke checks before
-the image identity can be frozen in `source-lock.json`.
+No manual `PYTHONPATH`, `PYTHONHOME`, Conda activation, compiler export or old
+`.so` is required. The scripts scrub inherited Python overlays and import
+DeepMD from the isolated venv's installed site-packages, preventing a source
+checkout from hiding `deepmd.lib`.
 
-Run `runtime/verify_base_sandbox.py` in that fresh device Sandbox. It checks the
-frozen Torch/CUDA identity, exactly one visible PPU device, the compiler and
-`ppu-smi` paths, and a synchronized FP32 device tensor operation. This remains
-an environment smoke test; it does not validate DPA4C or the Golden Candidate.
+## Outputs
+
+```text
+WORK/
+  venv/                  isolated candidate Python environment
+  build/                 current build.json, install.json and .so
+  logs/                  stage logs
+  results/check.json     live device dispatch and numerical micro-check
+  results/smoke.json     public E/F/virial/stress smoke and timing preview
+  results/result.json    machine-readable public score preview
+  submission/
+    candidate.patch
+    result.json
+    smoke.json
+    submission-manifest.json
+    SHA256SUMS
+```
+
+The submission contract is `candidate.patch + result.json +
+submission-manifest.json`; `smoke.json` and `SHA256SUMS` carry the public
+evidence and transfer integrity. The manifest binds repository URL, immutable
+commit/tree, exact base patch, every changed file, tracked build/install/run
+scripts, CUDA note, model/input result hashes and actual route.
+
+## Scoring boundary
+
+The public `score` command reports only
+`baseline_p50 / candidate_p50` from the short smoke. It does not create an
+official score. The organizer independently checks the contract, rebuilds the
+candidate, records the actually loaded `.so`, validates E/F/virial/stress and
+runs the private frozen paired protocol before assigning any final score.
+Formal seeds, reference arrays, credentials and the formal orchestrator stay
+in the separate private evaluator repository.
+
+## Troubleshooting
+
+- `deepmd.lib` missing: do not add the repository root to `PYTHONPATH`; rerun
+  `bootstrap` with the supported `/opt/ac2` runtime.
+- compiler missing: confirm the exact PPU template and
+  `/usr/local/PPU_SDK/CUDA_SDK/bin/nvcc`.
+- asset hash mismatch: stop and obtain the frozen external model/structure;
+  do not substitute data.
+- public smoke failure: retain `WORK/logs` and `WORK/results`; do not package a
+  PASS result.
+
+`CUDA_CHANGE.md`, `source-lock.json` and
+`protocol/public-smoke-tolerance.json` provide the source and numeric contract.

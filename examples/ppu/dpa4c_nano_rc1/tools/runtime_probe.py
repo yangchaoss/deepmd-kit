@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 
@@ -20,6 +21,16 @@ def max_abs(a, b) -> float:
     import torch
 
     return float((a - b).abs().max().detach().cpu())
+
+
+def load_adapter_install():
+    path = Path(__file__).resolve().parents[1] / "runner" / "runtime_adapter.py"
+    spec = importlib.util.spec_from_file_location("dpa4c_nano_runtime_adapter", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load tracked adapter: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.install
 
 
 def main() -> int:
@@ -40,8 +51,7 @@ def main() -> int:
 
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA/PPU device is unavailable")
-        from runner.runtime_adapter import install
-
+        install = load_adapter_install()
         adapter_info = install(a.shared_object)
         device = torch.device("cuda:0")
         dtype = torch.float32

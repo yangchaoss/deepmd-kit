@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import statistics
@@ -39,6 +40,16 @@ def sync() -> None:
         torch.cuda.synchronize()
 
 
+def load_adapter_install():
+    path = Path(__file__).resolve().with_name("runtime_adapter.py")
+    spec = importlib.util.spec_from_file_location("dpa4c_nano_runtime_adapter", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load tracked adapter: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.install
+
+
 def eval_calc(calc, atoms) -> dict[str, np.ndarray | float]:
     calc.calculate(atoms=atoms, properties=["energy", "forces", "virial", "stress"], system_changes=all_changes)
     return {
@@ -58,6 +69,22 @@ def compare(a, b) -> dict[str, float]:
     }
 
 
+def output_record(value) -> dict[str, object]:
+    energy = np.asarray(value["energy_eV"], dtype=np.float64).reshape(())
+    arrays = {
+        "forces_eV_per_A": np.asarray(value["forces_eV_per_A"]),
+        "virial_eV": np.asarray(value["virial_eV"]),
+        "stress_eV_per_A3": np.asarray(value["stress_eV_per_A3"]),
+    }
+    return {
+        "energy_eV": {"value": float(energy), "shape": [], "dtype": str(energy.dtype), "isfinite": bool(np.isfinite(energy))},
+        **{
+            name: {"shape": list(array.shape), "dtype": str(array.dtype), "isfinite": bool(np.isfinite(array).all()), "sha256": arr_sha(array)}
+            for name, array in arrays.items()
+        },
+    }
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--model", type=Path, required=True)
@@ -66,6 +93,7 @@ def main() -> int:
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--warmup", type=int, default=2)
     p.add_argument("--measure", type=int, default=5)
+    p.add_argument("--tolerance-json", type=Path)
     a = p.parse_args()
     a.output.parent.mkdir(parents=True, exist_ok=True)
     os.environ.setdefault("DP_COMPILE_INFER", "0")
@@ -89,7 +117,7 @@ def main() -> int:
     try:
         import torch
         from deepmd.calculator import DP
-        from runner.runtime_adapter import install
+        install = load_adapter_install()
 
         atoms = read(a.structure, index=0)
         if len(atoms) != 1024 or not bool(np.all(atoms.pbc)):
@@ -108,6 +136,12 @@ def main() -> int:
             baseline = eval_calc(baseline_calc, atoms)
             baseline_repeat = eval_calc(baseline_calc, atoms)
             baseline_cases.append((case, baseline, baseline_repeat))
+        atoms.positions = base_positions
+        baseline_times = []
+        for _ in range(a.warmup):
+            sync(); eval_calc(baseline_calc, atoms); sync()
+        for _ in range(a.measure):
+            sync(); t0 = time.perf_counter(); eval_calc(baseline_calc, atoms); sync(); baseline_times.append(time.perf_counter() - t0)
         adapter_info = install(a.shared_object)
         candidate_calc = DP(model=a.model, nlist_backend="auto")
         for case, displacement in (("base", 0.0), ("microperturbation", 1.0e-4)):
@@ -124,18 +158,8 @@ def main() -> int:
             case_results[name_a] = {
                 "diff": compare(base, candidate),
                 "baseline_repeat_noise": compare(base, baseline_repeat),
-                "baseline": {
-                    "energy_eV": base["energy_eV"],
-                    "forces_sha256": arr_sha(base["forces_eV_per_A"]),
-                    "virial_sha256": arr_sha(base["virial_eV"]),
-                    "stress_sha256": arr_sha(base["stress_eV_per_A3"]),
-                },
-                "candidate": {
-                    "energy_eV": candidate["energy_eV"],
-                    "forces_sha256": arr_sha(candidate["forces_eV_per_A"]),
-                    "virial_sha256": arr_sha(candidate["virial_eV"]),
-                    "stress_sha256": arr_sha(candidate["stress_eV_per_A3"]),
-                },
+                "baseline": output_record(base),
+                "candidate": output_record(candidate),
             }
             np.savez_compressed(
                 a.output.parent / f"{name_a}-raw-efs.npz",
@@ -163,9 +187,34 @@ def main() -> int:
             sync(); eval_calc(candidate_calc, atoms); sync()
         for _ in range(a.measure):
             sync(); t0 = time.perf_counter(); eval_calc(candidate_calc, atoms); sync(); times.append(time.perf_counter() - t0)
-        result["timing"] = {"warmup": a.warmup, "measure": a.measure, "seconds": times, "p50_ms": statistics.median(times) * 1000.0}
-        # Temporary development bound only; no contest threshold claim.
-        bounds = {"energy_eV": 2.0e-4, "forces_eV_per_A": 5.0e-5, "virial_eV": 2.0e-4, "stress_eV_per_A3": 1.0e-7}
+        baseline_p50 = statistics.median(baseline_times) * 1000.0
+        candidate_p50 = statistics.median(times) * 1000.0
+        result["timing"] = {
+            "scope": "public smoke preview; not formal scoring",
+            "warmup": a.warmup,
+            "measure": a.measure,
+            "baseline_seconds": baseline_times,
+            "candidate_seconds": times,
+            "baseline_p50_ms": baseline_p50,
+            "candidate_p50_ms": candidate_p50,
+            "preview_speedup": baseline_p50 / candidate_p50,
+        }
+        if a.tolerance_json:
+            tolerance_data = json.loads(a.tolerance_json.read_text(encoding="utf-8"))
+            if tolerance_data.get("schema_version") != "dpa4c-contest-runtime.public-smoke-tolerance.v1":
+                raise RuntimeError("unsupported public smoke tolerance schema")
+            fields = tolerance_data["fields"]
+            bounds = {
+                "energy_eV": float(fields["energy"]["atol"]),
+                "forces_eV_per_A": float(fields["forces"]["atol"]),
+                "virial_eV": float(fields["virial"]["atol"]),
+                "stress_eV_per_A3": float(fields["stress"]["atol"]),
+            }
+            if any(float(fields[name]["rtol"]) != 0.0 for name in ("energy", "forces", "virial", "stress")):
+                raise RuntimeError("public smoke requires rtol=0")
+            result["tolerance_manifest"] = {"path": str(a.tolerance_json.resolve()), "sha256": sha256(a.tolerance_json)}
+        else:
+            bounds = {"energy_eV": 3.4e-4, "forces_eV_per_A": 5.5e-5, "virial_eV": 5.0e-4, "stress_eV_per_A3": 1.0e-7}
         result["development_tolerances"] = bounds
         diff_bound_keys = {
             "energy_max_abs": bounds["energy_eV"],

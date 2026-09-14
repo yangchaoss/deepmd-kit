@@ -1,0 +1,11 @@
+{
+  "schema_version": "dpa4c-contest-runtime.public-smoke-tolerance.v1",
+  "scope": "DPA4C Nano, 1024 atoms, FP32, eager, single PPU, public smoke only",
+  "fields": {
+    "energy": {"atol": 0.00034, "rtol": 0.0, "unit": "eV"},
+    "forces": {"atol": 0.000055, "rtol": 0.0, "unit": "eV/A"},
+    "virial": {"atol": 0.0005, "rtol": 0.0, "unit": "eV"},
+    "stress": {"atol": 1e-7, "rtol": 0.0, "unit": "eV/A3"}
+  },
+  "formal_policy": "This public tolerance is a smoke gate and does not replace organizer-private formal validation."
+}
