@@ -7,8 +7,11 @@ declared there:
 
 ```text
 https://github.com/yangchaoss/deepmd-kit.git
-dpa4c-ppu-nano-starter-v1.0.0-rc1
+dpa4c-ppu-nano-starter-v1.0.0-rc2
 ```
+
+The published `dpa4c-ppu-nano-starter-v1.0.0-rc1` tag is superseded
+historical material and must not be used as the current starter.
 
 `scripts/contestant.sh` is retained only as a thin compatibility forwarder to
 `contest/contest.sh`. It does not define an alternate build, test, benchmark,

@@ -6,11 +6,13 @@ from Git so this file cannot become a second source of identity.
 
 ```text
 repository: https://github.com/yangchaoss/deepmd-kit.git
-starter_tag: dpa4c-ppu-nano-starter-v1.0.0-rc1
-commit: git rev-parse dpa4c-ppu-nano-starter-v1.0.0-rc1^{commit}
-tree: git rev-parse dpa4c-ppu-nano-starter-v1.0.0-rc1^{tree}
-frozen_base: 3d079bdfb3d5ba8b5604bdedff7d196082f7d80b
+starter_tag: dpa4c-ppu-nano-starter-v1.0.0-rc2
+commit: git rev-parse dpa4c-ppu-nano-starter-v1.0.0-rc2^{commit}
+tree: git rev-parse dpa4c-ppu-nano-starter-v1.0.0-rc2^{tree}
 ```
+
+The published `dpa4c-ppu-nano-starter-v1.0.0-rc1` tag is superseded
+historical material and must not be used as the current starter.
 
 `contest/README.md` is the single authoritative contestant-facing contract.
 The `contest/contest.sh` entrypoint remains the only build, test, benchmark,
