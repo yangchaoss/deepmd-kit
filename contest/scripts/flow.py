@@ -21,6 +21,9 @@ CONFIG = CONTEST / "config" / "runtime.json"
 BENCHMARK_TOLERANCE = CONTEST / "config" / "benchmark-tolerance.json"
 BUILD_REQUIREMENTS = CONTEST / "config" / "build-requirements.txt"
 RUNTIME_REQUIREMENTS = CONTEST / "config" / "runtime-requirements.txt"
+WHEELHOUSE_MANIFEST = CONTEST / "config" / "wheelhouse-manifest.json"
+DEFAULT_WHEELHOUSE = Path("/opt/dpa4c-contest-wheelhouse")
+WHEELHOUSE_ENV = "DPA4C_CONTEST_WHEELHOUSE"
 CANDIDATE_MANIFEST = CONTEST / "config" / "submission.json"
 FROZEN_TORCH_VERSION = "2.9.0+ali.10.ppu2.1.0.cu130"
 FROZEN_TORCH_ROOT = Path("/opt/ac2")
@@ -36,6 +39,65 @@ def sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def validate_wheelhouse(path: Path) -> dict[str, object]:
+    wheelhouse = path.expanduser().resolve()
+    if not wheelhouse.is_dir():
+        raise RuntimeError(f"contest wheelhouse is missing: {wheelhouse}")
+    manifest = json.loads(WHEELHOUSE_MANIFEST.read_text())
+    lock_paths = {"build": BUILD_REQUIREMENTS, "runtime": RUNTIME_REQUIREMENTS}
+    actual_files = {}
+    for group, lock_path in lock_paths.items():
+        declared = manifest["locks"][group]
+        if declared["path"] != str(lock_path.relative_to(ROOT)):
+            raise RuntimeError(f"wheelhouse {group} lock path mismatch")
+        actual_lock_sha = sha256(lock_path)
+        if declared["sha256"] != actual_lock_sha:
+            raise RuntimeError(f"wheelhouse {group} lock SHA mismatch")
+        files = []
+        for item in declared["files"]:
+            wheel = wheelhouse / item["filename"]
+            if not wheel.is_file():
+                raise RuntimeError(f"wheelhouse file is missing: {wheel}")
+            actual_sha = sha256(wheel)
+            if actual_sha != item["sha256"]:
+                raise RuntimeError(f"wheelhouse file SHA mismatch: {wheel}")
+            files.append({**item, "path": str(wheel), "actual_sha256": actual_sha})
+        actual_files[group] = files
+    return {
+        "path": str(wheelhouse),
+        "override_env": WHEELHOUSE_ENV,
+        "override_active": WHEELHOUSE_ENV in os.environ,
+        "manifest": {
+            "path": str(WHEELHOUSE_MANIFEST.relative_to(ROOT)),
+            "sha256": sha256(WHEELHOUSE_MANIFEST),
+        },
+        "locks": {
+            group: {
+                "path": manifest["locks"][group]["path"],
+                "sha256": manifest["locks"][group]["sha256"],
+                "files": actual_files[group],
+            }
+            for group in ("build", "runtime")
+        },
+    }
+
+
+def resolve_wheelhouse() -> dict[str, object]:
+    return validate_wheelhouse(Path(os.environ.get(WHEELHOUSE_ENV, DEFAULT_WHEELHOUSE)))
+
+
+def offline_pip_install(
+    python: Path, run_root: Path, requirements: Path, wheelhouse: Path, log: Path
+) -> list[str]:
+    command = [
+        str(python), "-s", "-m", "pip", "install", "--no-index",
+        "--find-links", str(wheelhouse), "--no-deps", "--require-hashes",
+        "-r", str(requirements),
+    ]
+    run(command, cwd=run_root, log=log, env=clean_env(python))
+    return command
 
 
 def run(command: list[str], *, cwd: Path, log: Path, env: dict[str, str]) -> None:
@@ -210,17 +272,11 @@ def inspect_build_environment(python: Path, run_root: Path) -> dict[str, object]
 
 
 def install_runtime_requirements(
-    python: Path, run_root: Path, candidate_prefix: Path
+    python: Path, run_root: Path, candidate_prefix: Path, wheelhouse: Path
 ) -> dict[str, object]:
-    command = [
-        str(python), "-s", "-m", "pip", "install", "--no-deps",
-        "--require-hashes", "-r", str(RUNTIME_REQUIREMENTS),
-    ]
-    run(
-        command,
-        cwd=run_root,
-        log=run_root / "logs" / "04-runtime-requirements.log",
-        env=clean_env(python),
+    command = offline_pip_install(
+        python, run_root, RUNTIME_REQUIREMENTS, wheelhouse,
+        run_root / "logs" / "04-runtime-requirements.log",
     )
     packages = inspect_python_packages(python, run_root, (("ase", "ase"),))
     ase = packages["ase"]
@@ -352,6 +408,9 @@ def build(args) -> None:
     identity = source_identity()
     git(["ls-files", "--error-unmatch", str(CANDIDATE_MANIFEST.relative_to(ROOT))])
     git(["ls-files", "--error-unmatch", str(RUNTIME_REQUIREMENTS.relative_to(ROOT))])
+    git(["ls-files", "--error-unmatch", str(WHEELHOUSE_MANIFEST.relative_to(ROOT))])
+    wheelhouse_identity = resolve_wheelhouse()
+    wheelhouse = Path(wheelhouse_identity["path"])
     for name in ("build", "install", "logs", "results"):
         (run_root / name).mkdir(parents=True, exist_ok=True)
     baseline_python = Path(args.baseline_python or config["baseline_python"])
@@ -361,11 +420,9 @@ def build(args) -> None:
     setuptools_before = inspect_python_packages(
         python, run_root, (("setuptools", "setuptools"),)
     )["setuptools"]
-    run(
-        [str(python), "-s", "-m", "pip", "install", "--no-deps", "--require-hashes", "-r", str(BUILD_REQUIREMENTS)],
-        cwd=run_root,
-        log=run_root / "logs" / "02-build-requirements.log",
-        env=clean_env(python),
+    build_requirements_command = offline_pip_install(
+        python, run_root, BUILD_REQUIREMENTS, wheelhouse,
+        run_root / "logs" / "02-build-requirements.log",
     )
     build_environment = inspect_build_environment(python, run_root)
     dist = run_root / "build" / "wheels"
@@ -411,7 +468,9 @@ def build(args) -> None:
             raise RuntimeError("wheel RECORD does not bind required deepmd.lib files")
     run([str(python), "-s", "-m", "pip", "install", "--no-deps", "--force-reinstall", str(wheel)], cwd=run_root, log=run_root / "logs" / "03-install.log", env=clean_env(python))
     site = site_packages(python, run_root)
-    runtime_requirements = install_runtime_requirements(python, run_root, site)
+    runtime_requirements = install_runtime_requirements(
+        python, run_root, site, wheelhouse
+    )
     entry = site / "dpa4c_candidate"
     entry.mkdir(exist_ok=False)
     for source in sorted((CONTEST / "candidate").glob("*.py")):
@@ -430,8 +489,10 @@ def build(args) -> None:
             "SKBUILD_BUILD_DIR": str(scikit_build),
             "requirements": str(BUILD_REQUIREMENTS),
             "requirements_sha256": sha256(BUILD_REQUIREMENTS),
+            "requirements_install_command": build_requirements_command,
         },
         "runtime_requirements": runtime_requirements,
+        "wheelhouse": wheelhouse_identity,
         "wheel": {"path": str(wheel), "sha256": sha256(wheel), "size_bytes": wheel.stat().st_size},
         "candidate_python": str(python),
         "candidate_prefix": str(site),

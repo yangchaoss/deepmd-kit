@@ -43,9 +43,31 @@ class FakeAtoms:
 
 class PublicBenchmarkTest(unittest.TestCase):
     def test_runtime_requirements_are_hash_locked(self):
+        lines = flow.RUNTIME_REQUIREMENTS.read_text().splitlines()
+        self.assertEqual(len(lines), 18)
         self.assertEqual(
-            flow.RUNTIME_REQUIREMENTS.read_text(),
-            "ase==3.29.0 --hash=sha256:7b9dd103f007810339c24acfee2f6b677c0c48443b21d3c98e52959246cf4ebf\n",
+            {line.split("==", 1)[0] for line in lines},
+            {
+                "array-api-compat", "ase", "bracex", "colorama", "dargs",
+                "deprecated", "flexcache", "flexparser", "greenlet", "h5py",
+                "lmdb", "mendeleev", "pint", "pyfiglet", "sqlalchemy",
+                "typeguard", "wcmatch", "wrapt",
+            },
+        )
+        self.assertTrue(all(" --hash=sha256:" in line for line in lines))
+        locked = {
+            line.split("==", 1)[0]: line.rsplit("--hash=sha256:", 1)[1]
+            for line in lines
+        }
+        manifest = json.loads(flow.WHEELHOUSE_MANIFEST.read_text())
+        declared = {
+            item["name"]: item["sha256"]
+            for item in manifest["locks"]["runtime"]["files"]
+        }
+        self.assertEqual(locked, declared)
+        self.assertEqual(
+            manifest["locks"]["runtime"]["sha256"],
+            flow.sha256(flow.RUNTIME_REQUIREMENTS),
         )
 
     def test_runtime_requirements_install_is_bound_and_records_ase(self):
@@ -54,6 +76,7 @@ class PublicBenchmarkTest(unittest.TestCase):
             prefix = run_root / "install/candidate-venv/lib/python3.12/site-packages"
             ase_path = prefix / "ase/__init__.py"
             python = run_root / "install/candidate-venv/bin/python"
+            wheelhouse = run_root / "wheelhouse"
             with (
                 mock.patch.object(flow, "run") as run,
                 mock.patch.object(
@@ -62,12 +85,15 @@ class PublicBenchmarkTest(unittest.TestCase):
                     return_value={"ase": {"version": "3.29.0", "path": str(ase_path)}},
                 ),
             ):
-                identity = flow.install_runtime_requirements(python, run_root, prefix)
+                identity = flow.install_runtime_requirements(
+                    python, run_root, prefix, wheelhouse
+                )
         command = run.call_args.args[0]
-        self.assertEqual(
-            command[-4:],
-            ["--no-deps", "--require-hashes", "-r", str(flow.RUNTIME_REQUIREMENTS)],
-        )
+        self.assertIn("--no-index", command)
+        self.assertEqual(command[command.index("--find-links") + 1], str(wheelhouse))
+        self.assertIn("--no-deps", command)
+        self.assertIn("--require-hashes", command)
+        self.assertEqual(command[-2:], ["-r", str(flow.RUNTIME_REQUIREMENTS)])
         self.assertEqual(identity["path"], "contest/config/runtime-requirements.txt")
         self.assertEqual(identity["sha256"], flow.sha256(flow.RUNTIME_REQUIREMENTS))
         self.assertEqual(identity["install_command"], command)
@@ -80,6 +106,81 @@ class PublicBenchmarkTest(unittest.TestCase):
             source.index("install_runtime_requirements"),
             source.index("05-candidate-identity.log"),
         )
+
+    def test_both_requirement_installs_are_offline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            python = root / "venv/bin/python"
+            wheelhouse = root / "wheelhouse"
+            with mock.patch.object(flow, "run") as run:
+                commands = [
+                    flow.offline_pip_install(
+                        python, root, requirements, wheelhouse, root / f"{index}.log"
+                    )
+                    for index, requirements in enumerate(
+                        (flow.BUILD_REQUIREMENTS, flow.RUNTIME_REQUIREMENTS)
+                    )
+                ]
+        self.assertEqual(run.call_count, 2)
+        for command in commands:
+            self.assertIn("--no-index", command)
+            self.assertEqual(command[command.index("--find-links") + 1], str(wheelhouse))
+            self.assertIn("--no-deps", command)
+            self.assertIn("--require-hashes", command)
+
+    def test_missing_wheelhouse_fails_fast(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing"
+            with self.assertRaisesRegex(RuntimeError, "wheelhouse is missing"):
+                flow.validate_wheelhouse(missing)
+        source = inspect.getsource(flow.build)
+        self.assertLess(source.index("resolve_wheelhouse"), source.index("python.is_file"))
+
+    def test_wheelhouse_manifest_binds_lock_and_file_hashes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wheelhouse = root / "wheelhouse"
+            wheelhouse.mkdir()
+            build_lock = root / "build.txt"
+            runtime_lock = root / "runtime.txt"
+            build_lock.write_text("build\n")
+            runtime_lock.write_text("runtime\n")
+            build_wheel = wheelhouse / "build.whl"
+            runtime_wheel = wheelhouse / "runtime.whl"
+            build_wheel.write_bytes(b"build-wheel")
+            runtime_wheel.write_bytes(b"runtime-wheel")
+            build_wheel_sha = flow.sha256(build_wheel)
+            runtime_wheel_sha = flow.sha256(runtime_wheel)
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(json.dumps({
+                "locks": {
+                    "build": {
+                        "path": "build.txt", "sha256": flow.sha256(build_lock),
+                        "files": [{"name": "build", "version": "1", "filename": "build.whl", "sha256": build_wheel_sha}],
+                    },
+                    "runtime": {
+                        "path": "runtime.txt", "sha256": flow.sha256(runtime_lock),
+                        "files": [{"name": "runtime", "version": "1", "filename": "runtime.whl", "sha256": runtime_wheel_sha}],
+                    },
+                }
+            }))
+            with (
+                mock.patch.object(flow, "ROOT", root),
+                mock.patch.object(flow, "BUILD_REQUIREMENTS", build_lock),
+                mock.patch.object(flow, "RUNTIME_REQUIREMENTS", runtime_lock),
+                mock.patch.object(flow, "WHEELHOUSE_MANIFEST", manifest_path),
+            ):
+                identity = flow.validate_wheelhouse(wheelhouse)
+        self.assertEqual(identity["path"], str(wheelhouse.resolve()))
+        self.assertEqual(identity["locks"]["build"]["files"][0]["actual_sha256"], build_wheel_sha)
+        self.assertEqual(identity["locks"]["runtime"]["files"][0]["actual_sha256"], runtime_wheel_sha)
+
+    def test_contest_git_has_no_binary_wheels(self):
+        tracked = subprocess.check_output(
+            ["git", "-C", str(Path(__file__).parents[2]), "ls-files", "contest"],
+            text=True,
+        ).splitlines()
+        self.assertFalse([name for name in tracked if Path(name).suffix == ".whl"])
 
     def test_three_disjoint_public_pairs_and_order(self):
         with mock.patch.object(benchmark, "load_atoms", return_value=FakeAtoms()):

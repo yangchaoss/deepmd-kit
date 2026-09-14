@@ -24,6 +24,22 @@ against `BUILD_STATUS.json`; mismatches fail closed in
 candidate in separate processes from an external CWD and apply the frozen public
 Nano/1024 FP32 E/F/virial/stress tolerances.
 
+The official runtime image provides the complete wheelhouse at
+`/opt/dpa4c-contest-wheelhouse`. Both build and runtime requirements are
+installed strictly offline with `--no-index --find-links`, `--no-deps`, and
+`--require-hashes`; the checked wheel filenames and SHA-256 values are bound by
+`config/wheelhouse-manifest.json`. Organizers may override only the wheelhouse
+path with `DPA4C_CONTEST_WHEELHOUSE` for controlled debugging. Contestants do
+not resolve or download dependencies and only run the one tracked entrypoint.
+The image recipe may populate the directory with:
+
+```bash
+python -m pip download --only-binary=:all: --no-deps --require-hashes \
+  --dest /opt/dpa4c-contest-wheelhouse \
+  -r contest/config/build-requirements.txt \
+  -r contest/config/runtime-requirements.txt
+```
+
 `benchmark` is a public, unverified self-test. It runs three fresh-process
 baseline/candidate pairs in AB/BA/AB order, with 20 warmup and 500 measured
 frames per route. Each route uses a separate process; reference evaluation is

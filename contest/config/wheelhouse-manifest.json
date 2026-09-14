@@ -1,0 +1,44 @@
+{
+  "schema_version": "dpa4c-ppu-contest.wheelhouse.v1",
+  "default_path": "/opt/dpa4c-contest-wheelhouse",
+  "locks": {
+    "build": {
+      "path": "contest/config/build-requirements.txt",
+      "sha256": "66e3b74d381d2d6fc0aa9666f0164530ee3921b1d0a4df03239a01553dff77e5",
+      "files": [
+        {"name": "dependency-groups", "version": "1.3.2", "filename": "dependency_groups-1.3.2-py3-none-any.whl", "sha256": "8c337f7b92445823b0d0ea507f611390c58dcd2112be00aebcd738a2ca7a1c64"},
+        {"name": "hatch-fancy-pypi-readme", "version": "25.1.0", "filename": "hatch_fancy_pypi_readme-25.1.0-py3-none-any.whl", "sha256": "ce0134c40d63d874ac48f48ccc678b8f3b62b8e50e9318520d2bffc752eedaf3"},
+        {"name": "packaging", "version": "26.0", "filename": "packaging-26.0-py3-none-any.whl", "sha256": "b36f1fef9334a5588b4166f8bcd26a14e521f2b55e6b9de3aaa80d3ff7a37529"},
+        {"name": "pathspec", "version": "1.1.1", "filename": "pathspec-1.1.1-py3-none-any.whl", "sha256": "a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189"},
+        {"name": "scikit-build-core", "version": "1.0.3", "filename": "scikit_build_core-1.0.3-py3-none-any.whl", "sha256": "ae95427b7d3c14a6cf8bbfd4d901f6138ab64c99e20cbe8ea7d75cd26093f085"},
+        {"name": "setuptools-scm", "version": "9.2.2", "filename": "setuptools_scm-9.2.2-py3-none-any.whl", "sha256": "30e8f84d2ab1ba7cb0e653429b179395d0c33775d54807fc5f1dd6671801aef7"}
+      ]
+    },
+    "runtime": {
+      "path": "contest/config/runtime-requirements.txt",
+      "sha256": "5b995cbb2e0d4e72d90feabe3325d9c12eff19d1f2065287028e8229fa57e890",
+      "files": [
+        {"name": "array-api-compat", "version": "1.15.0", "filename": "array_api_compat-1.15.0-py3-none-any.whl", "sha256": "7b1b9c53269061403fd5f45a8de349f16e7887653328bfa0c5f2d45299ff0a8e"},
+        {"name": "ase", "version": "3.29.0", "filename": "ase-3.29.0-py3-none-any.whl", "sha256": "7b9dd103f007810339c24acfee2f6b677c0c48443b21d3c98e52959246cf4ebf"},
+        {"name": "bracex", "version": "3.0.1", "filename": "bracex-3.0.1-py3-none-any.whl", "sha256": "6523ad83aeb5098a4ee597cff0f964442ff74e460bd3fafaffab6a013ff2288c"},
+        {"name": "colorama", "version": "0.4.6", "filename": "colorama-0.4.6-py2.py3-none-any.whl", "sha256": "4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6"},
+        {"name": "dargs", "version": "0.5.1", "filename": "dargs-0.5.1-py3-none-any.whl", "sha256": "faa9660c3fbbca9dfa3c6950add079725be9cb0de4c005fcb5450ea460900c06"},
+        {"name": "deprecated", "version": "1.3.1", "filename": "deprecated-1.3.1-py2.py3-none-any.whl", "sha256": "597bfef186b6f60181535a29fbe44865ce137a5079f295b479886c82729d5f3f"},
+        {"name": "flexcache", "version": "0.3", "filename": "flexcache-0.3-py3-none-any.whl", "sha256": "d43c9fea82336af6e0115e308d9d33a185390b8346a017564611f1466dcd2e32"},
+        {"name": "flexparser", "version": "0.4", "filename": "flexparser-0.4-py3-none-any.whl", "sha256": "3738b456192dcb3e15620f324c447721023c0293f6af9955b481e91d00179846"},
+        {"name": "greenlet", "version": "3.5.5", "filename": "greenlet-3.5.5-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", "sha256": "147b25a42e5ca5be3d42356e8f608b37af715a1c196e9bf9d1627f3341adfe1d"},
+        {"name": "h5py", "version": "3.16.0", "filename": "h5py-3.16.0-cp312-cp312-manylinux_2_28_x86_64.whl", "sha256": "dfc21898ff025f1e8e67e194965a95a8d4754f452f83454538f98f8a3fcb207e"},
+        {"name": "lmdb", "version": "2.3.0", "filename": "lmdb-2.3.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", "sha256": "1c53bf2c1d0a03cf9ebb8caf48531f2a33313c5580af82ba4260b1e7fa52c857"},
+        {"name": "mendeleev", "version": "1.3.0", "filename": "mendeleev-1.3.0-py3-none-any.whl", "sha256": "76f415767b654634e51dead755513ef431abf200e892eab8468aa659ff218d1c"},
+        {"name": "pint", "version": "0.24.4", "filename": "Pint-0.24.4-py3-none-any.whl", "sha256": "aa54926c8772159fcf65f82cc0d34de6768c151b32ad1deb0331291c38fe7659"},
+        {"name": "pyfiglet", "version": "0.8.post1", "filename": "pyfiglet-0.8.post1-py2.py3-none-any.whl", "sha256": "d555bcea17fbeaf70eaefa48bb119352487e629c9b56f30f383e2c62dd67a01c"},
+        {"name": "sqlalchemy", "version": "2.0.52", "filename": "sqlalchemy-2.0.52-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", "sha256": "8738008376d22f30f411ea3efecf39b51110b6996d80bb73786f30bcfdd5fd3b"},
+        {"name": "typeguard", "version": "4.6.0", "filename": "typeguard-4.6.0-py3-none-any.whl", "sha256": "79878165bb86f2cf5d41d159a0ff1792a796cf496882d2fe1b1c6c7049b9cdd7"},
+        {"name": "wcmatch", "version": "11.0.1", "filename": "wcmatch-11.0.1-py3-none-any.whl", "sha256": "fd149ecddb9f0a88ea780017d6dde17c994e494e7f7303d4e3c9d6251f978f4b"},
+        {"name": "wrapt", "version": "2.4.1", "filename": "wrapt-2.4.1-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", "sha256": "30d11c289b013bf384ff1a1a6553f150d0b855901708a9bef667a5680f8247c9"}
+      ]
+    }
+  },
+  "hash_source": "PyPI JSON urls[].digests.sha256 matched by exact filename; mirror must expose identical bytes",
+  "hash_source_url_template": "https://pypi.org/pypi/{name}/{version}/json"
+}
