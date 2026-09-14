@@ -99,11 +99,12 @@ in the separate private evaluator repository.
 
 ## Runtime image recipe
 
-`image/Dockerfile` builds the pinned PPU SDK/CUDA/Torch runtime. Source remains
-in this public repository and is fetched at the fixed rc1 tag after the sandbox
-starts; this avoids coupling image construction to external Git network
-availability. The image contains no source, model, structure, candidate result,
-private evaluator or credential.
+`image/Dockerfile` starts from the pinned PPU SDK/CUDA/Torch runtime and runs
+`git clone` for this public repository during image construction. The checkout
+is fixed to the rc1 tag and verified against its immutable commit and tree, so
+the sandbox starts with source already available at
+`/opt/dpa4c-contestant-kit`. Model, structure, candidate result, private
+evaluator and credentials remain external.
 
 For a self-contained image, `image/build_embedded_dockerfile.py` generates a
 size-bounded Dockerfile chain containing a real sparse Git checkout of the
