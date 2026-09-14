@@ -41,7 +41,7 @@ def main() -> int:
     git(repo, "cat-file", "-e", args.base_commit + "^{commit}")
     output.mkdir(parents=True)
     patch = output / "candidate.patch"
-    patch.write_bytes(subprocess.check_output(["git", "-C", str(repo), "diff", "--binary", "--full-index", "--no-ext-diff", args.base_commit, head, "--"]))
+    patch.write_bytes(subprocess.check_output(["git", "-C", str(repo), "diff", "--binary", "--no-ext-diff", "--no-textconv", args.base_commit, head, "--"]))
     if not patch.stat().st_size:
         raise SystemExit("candidate patch is empty")
     shutil.copy2(args.smoke, output / "smoke.json")

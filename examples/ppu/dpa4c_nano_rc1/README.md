@@ -72,11 +72,15 @@ WORK/
     SHA256SUMS
 ```
 
-The submission contract is `candidate.patch + result.json +
-submission-manifest.json`; `smoke.json` and `SHA256SUMS` carry the public
+The submission contract is `candidate.patch + result.json + submission-manifest.json`;
+`smoke.json` and `SHA256SUMS` carry the public
 evidence and transfer integrity. The manifest binds repository URL, immutable
 commit/tree, exact base patch, every changed file, tracked build/install/run
 scripts, CUDA note, model/input result hashes and actual route.
+
+The default submission base is frozen commit
+`3d079bdfb3d5ba8b5604bdedff7d196082f7d80b`. Override `--base-commit` only
+when the organizer publishes a different frozen base.
 
 ## Scoring boundary
 

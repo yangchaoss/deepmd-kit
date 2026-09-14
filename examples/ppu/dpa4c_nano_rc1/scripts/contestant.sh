@@ -8,7 +8,7 @@ shift || true
 MODEL=""
 STRUCTURE=""
 WORK_ROOT=""
-BASE_COMMIT="14a71f13bb840c10d78465f75a00e3a31764a0fd"
+BASE_COMMIT="3d079bdfb3d5ba8b5604bdedff7d196082f7d80b"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --model) MODEL="$2"; shift 2 ;;
