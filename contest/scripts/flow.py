@@ -118,6 +118,7 @@ for module_name, distribution in (
     ('dependency_groups', 'dependency-groups'),
     ('pathspec', 'pathspec'),
     ('packaging', 'packaging'),
+    ('setuptools_scm', 'setuptools-scm'),
     ('torch', 'torch'),
 ):
     module = importlib.import_module(module_name)
