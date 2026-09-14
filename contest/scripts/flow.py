@@ -114,7 +114,27 @@ def build(args) -> None:
     dist.mkdir(exist_ok=True)
     if any(dist.iterdir()):
         raise RuntimeError(f"fresh build directory is not empty: {dist}")
-    run([str(python), "-s", "-m", "pip", "wheel", ".", "--no-deps", "--wheel-dir", str(dist)], cwd=ROOT, log=run_root / "logs" / "02-wheel.log", env=clean_env(python))
+    scikit_build = run_root / "build" / "scikit-build"
+    if scikit_build.exists() and any(scikit_build.iterdir()):
+        raise RuntimeError(f"fresh scikit-build directory is not empty: {scikit_build}")
+    wheel_env = clean_env(python)
+    wheel_env["SKBUILD_BUILD_DIR"] = str(scikit_build)
+    run(
+        [
+            str(python),
+            "-s",
+            "-m",
+            "pip",
+            "wheel",
+            ".",
+            "--no-deps",
+            "--wheel-dir",
+            str(dist),
+        ],
+        cwd=ROOT,
+        log=run_root / "logs" / "02-wheel.log",
+        env=wheel_env,
+    )
     wheels = sorted(dist.glob("deepmd_kit-*.whl"))
     if len(wheels) != 1:
         raise RuntimeError(f"expected one DeepMD wheel, found {wheels}")
