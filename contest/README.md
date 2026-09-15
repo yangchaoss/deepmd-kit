@@ -3,7 +3,7 @@
 This file is the only authoritative contestant-facing contract for the Nano
 PPU flow. The starter repository is
 `https://github.com/yangchaoss/deepmd-kit.git`; the immutable starter ref is
-`dpa4c-ppu-nano-starter-v1.0.0-rc6`. Resolve that tag to record the exact
+`dpa4c-ppu-nano-starter-v1.0.0-rc7`. Resolve that tag to record the exact
 commit and tree used by a run. Historical files under
 `examples/ppu/dpa4c_nano_rc1/` are compatibility material only and do not
 define a second submission contract.
@@ -14,14 +14,15 @@ The published `dpa4c-ppu-nano-starter-v1.0.0-rc1`,
 and must not be used as the current starter. rc2 was superseded after final
 Runtime Image prevalidation exposed candidate dependency inheritance and
 failed the isolation gate; rc1, rc2, and rc3 remain history only.
+The preceding `dpa4c-ppu-nano-starter-v1.0.0-rc6` tag is also superseded by
+rc7 and remains historical evidence only.
 
 The organizer calls one tracked entrypoint.  Assets remain external and are
 accepted only at the frozen SHA-256 values in `config/runtime.json`.
 
-The current frozen ref remains rc6 until this onboarding and scope-gate change
-is reviewed and published as a new starter. When it is released, update the
-immutable starter tag, `DEFAULT_STARTER_REF`, and the Runtime Image together;
-do not treat uncommitted organizer edits as an rc6 contestant baseline.
+The current frozen ref is rc7. The immutable starter tag,
+`DEFAULT_STARTER_REF`, and the Runtime Image are released together; do not
+treat uncommitted organizer edits as a contestant baseline.
 
 ## Short contestant flow
 
@@ -32,7 +33,7 @@ branch. The organization pre-mounts the two fixed assets at
 
 ```text
 enter /opt/dpa4c-contestant-kit
-  -> detach at dpa4c-ppu-nano-starter-v1.0.0-rc6
+  -> detach at dpa4c-ppu-nano-starter-v1.0.0-rc7
   -> create candidate/<name> and commit the candidate change
   -> run the one-command quick self-test
   -> run the one-command full self-test
@@ -43,7 +44,7 @@ Create a branch for the candidate (replace `my-model` with a short name):
 
 ```bash
 cd /opt/dpa4c-contestant-kit
-git switch --detach dpa4c-ppu-nano-starter-v1.0.0-rc6
+git switch --detach dpa4c-ppu-nano-starter-v1.0.0-rc7
 git switch -c candidate/my-model
 git config user.name "Contestant"
 git config user.email "contestant@example.invalid"
@@ -113,8 +114,8 @@ benchmark and candidate contract failures invalidate the candidate.
 ```bash
 ./contest/contest.sh build --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets
 ./contest/contest.sh test  --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets
-./contest/contest.sh benchmark --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc6
-./contest/contest.sh package --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc6
+./contest/contest.sh benchmark --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc7
+./contest/contest.sh package --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc7
 ```
 
 The default profile is `quick`: one public baseline/candidate pair with 2

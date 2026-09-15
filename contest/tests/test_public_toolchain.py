@@ -880,10 +880,10 @@ class PublicBenchmarkTest(unittest.TestCase):
         self.assertIn("missing model:", result.stderr)
         self.assertNotIn("can't open file", result.stderr)
 
-    def test_rc6_is_the_only_default_starter(self):
-        self.assertEqual(flow.DEFAULT_STARTER_REF, "dpa4c-ppu-nano-starter-v1.0.0-rc6")
+    def test_rc7_is_the_only_default_starter(self):
+        self.assertEqual(flow.DEFAULT_STARTER_REF, "dpa4c-ppu-nano-starter-v1.0.0-rc7")
         readme = (Path(__file__).parents[1] / "README.md").read_text()
-        self.assertIn("dpa4c-ppu-nano-starter-v1.0.0-rc6", readme)
+        self.assertIn("dpa4c-ppu-nano-starter-v1.0.0-rc7", readme)
 
     def test_contestant_onboarding_docs_bind_image_entrypoint_and_protocols(self):
         contest_readme = (Path(__file__).parents[1] / "README.md").read_text()
@@ -898,10 +898,10 @@ class PublicBenchmarkTest(unittest.TestCase):
         self.assertIn("--run-root", contest_readme)
         self.assertIn("contest/README.md", root_readme)
 
-    def test_runtime_image_binds_rc6_tag_and_external_provenance(self):
+    def test_runtime_image_binds_rc7_tag_and_external_provenance(self):
         dockerfile = (Path(__file__).parents[1] / "image/Dockerfile").read_text()
         runtime = json.loads((Path(__file__).parents[1] / "config/runtime.json").read_text())
-        self.assertIn("--branch dpa4c-ppu-nano-starter-v1.0.0-rc6", dockerfile)
+        self.assertIn("--branch dpa4c-ppu-nano-starter-v1.0.0-rc7", dockerfile)
         self.assertEqual(runtime["baseline_python"], "/opt/dpa4c-baseline-venv/bin/python")
         self.assertIn("DPA4C_BASELINE_VENV=/opt/dpa4c-baseline-venv", dockerfile)
         self.assertIn("DPA4C_BASELINE_BUILD=/opt/dpa4c-baseline-build", dockerfile)

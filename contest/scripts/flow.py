@@ -34,7 +34,7 @@ WHEELHOUSE_ENV = "DPA4C_CONTEST_WHEELHOUSE"
 CANDIDATE_MANIFEST = CONTEST / "config" / "submission.json"
 FROZEN_TORCH_VERSION = "2.9.0+ali.10.ppu2.1.0.cu130"
 FROZEN_TORCH_ROOT = Path("/opt/ac2")
-DEFAULT_STARTER_REF = "dpa4c-ppu-nano-starter-v1.0.0-rc6"
+DEFAULT_STARTER_REF = "dpa4c-ppu-nano-starter-v1.0.0-rc7"
 BENCHMARK_WORKER = CONTEST / "scripts" / "public_route_worker.py"
 BENCHMARK_RUNNER = CONTEST / "scripts" / "public_benchmark.py"
 BINARY_IMPLEMENTATION_SUFFIXES = {".so", ".o", ".a", ".whl"}
@@ -252,7 +252,7 @@ def new_run_root(profile: str) -> Path:
     owner_root.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     for _ in range(32):
-        candidate = owner_root / f"rc6-{profile}-{stamp}-{uuid.uuid4().hex[:10]}"
+        candidate = owner_root / f"rc7-{profile}-{stamp}-{uuid.uuid4().hex[:10]}"
         try:
             candidate.mkdir()
         except FileExistsError:
