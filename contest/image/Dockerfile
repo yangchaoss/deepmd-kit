@@ -52,6 +52,13 @@ RUN set -eux; \
     ln -s "$DPA4C_CONTESTANT_ROOT/contest/contest.sh" /usr/local/bin/dpa4c-contestant-flow; \
     test -x /usr/local/bin/dpa4c-contestant-flow
 
+# The runtime image must carry the frozen baseline independently of the
+# contestant checkout.  Fail closed here if the base image cannot import the
+# baseline DeepMD package and its key shared objects; this check never adds a
+# candidate wheel, source path, or online dependency to the baseline import.
+RUN set -eux; \
+    env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 /opt/ac2/bin/python -c 'import hashlib,json,sys; from pathlib import Path; import deepmd; import deepmd.lib; from deepmd.calculator import DP; prefix=Path(sys.prefix).resolve(); source=Path("/opt/dpa4c-contestant-kit").resolve(); d=Path(deepmd.__file__).resolve(); l=Path(deepmd.lib.__file__).resolve(); assert d.is_relative_to(prefix) and l.is_relative_to(prefix); assert not d.is_relative_to(source) and not l.is_relative_to(source); elfs=[{"path":str(p.resolve()),"sha256":hashlib.file_digest(p.open("rb"),"sha256").hexdigest(),"size_bytes":p.stat().st_size} for p in sorted(l.parent.rglob("*.so"))]; assert elfs,"baseline deepmd.lib contains no shared objects"; result={"status":"PASS","python":str(Path(sys.executable).resolve()),"prefix":str(prefix),"deepmd":str(d),"deepmd_lib":str(l),"deepmd_elfs":elfs,"sys_path":sys.path}; Path("/opt/dpa4c-baseline-identity.json").write_text(json.dumps(result,indent=2)+"\n"); print(json.dumps(result,indent=2))'
+
 LABEL org.opencontainers.image.source="https://github.com/yangchaoss/deepmd-kit" \
       org.opencontainers.image.version="dpa4c-ppu-nano-starter-v1.0.0-rc5" \
       com.dptech.dpa4c.source-tag="dpa4c-ppu-nano-starter-v1.0.0-rc5" \

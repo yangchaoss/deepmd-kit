@@ -730,6 +730,11 @@ class PublicBenchmarkTest(unittest.TestCase):
         self.assertIn("symbolic-ref -q HEAD", dockerfile)
         self.assertIn("DPA4C_RESOLVED_HEAD", dockerfile)
         self.assertIn("DPA4C_RESOLVED_TREE", dockerfile)
+        self.assertIn("/opt/dpa4c-baseline-identity.json", dockerfile)
+        self.assertIn("import deepmd.lib", dockerfile)
+        self.assertIn("from deepmd.calculator import DP", dockerfile)
+        self.assertIn("env -u PYTHONPATH -u PYTHONHOME", dockerfile)
+        self.assertIn("baseline deepmd.lib contains no shared objects", dockerfile)
         self.assertNotIn("com.dptech.dpa4c.source-commit", dockerfile)
         self.assertNotIn("com.dptech.dpa4c.source-tree", dockerfile)
 
