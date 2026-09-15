@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -630,6 +631,7 @@ class PublicBenchmarkTest(unittest.TestCase):
                     mock.patch.object(flow, "resolve_inputs", return_value=({}, run_root, root / "model", root / "structure")),
                     mock.patch.object(flow, "source_identity", return_value={"commit": "candidate", "tree": "tree"}),
                     mock.patch.object(flow, "git", side_effect=lambda command: "starter" if command[:2] == ["rev-parse", "base^{commit}"] else ""),
+                    mock.patch.object(flow, "enforce_candidate_scope", return_value=[]),
                 ):
                     if variant == "binding":
                         with self.assertRaises(FileNotFoundError):
@@ -697,6 +699,97 @@ class PublicBenchmarkTest(unittest.TestCase):
             ).strip()
             self.assertEqual(result["reconstructed_tree"], expected_tree)
             self.assertEqual(result["changed_files"], ["source.py"])
+
+    def test_candidate_scope_rejects_added_deleted_renamed_and_mode_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repo = Path(directory) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+            subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+            (repo / "source.py").write_text("value = 1\n")
+            (repo / "contest/candidate").mkdir(parents=True)
+            (repo / "contest/scripts").mkdir(parents=True)
+            (repo / "contest/config").mkdir(parents=True)
+            (repo / "contest/candidate/old.py").write_text("candidate\n")
+            (repo / "contest/scripts/old.py").write_text("script\n")
+            (repo / "contest/config/old.json").write_text("{}\n")
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "base"], check=True)
+            base = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+            ).strip()
+            (repo / "source.py").chmod(0o755)
+            (repo / "contest/scripts/new.py").write_text("new\n")
+            (repo / "contest/config/old.json").unlink()
+            subprocess.run(
+                ["git", "-C", str(repo), "mv", "contest/candidate/old.py", "contest/scripts/renamed.py"],
+                check=True,
+            )
+            subprocess.run(["git", "-C", str(repo), "add", "-u", "source.py", "contest/config/old.json"], check=True)
+            subprocess.run(["git", "-C", str(repo), "add", "contest/scripts/new.py"], check=True)
+            subprocess.run(["git", "-C", str(repo), "commit", "-qm", "scope"], check=True)
+            candidate = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True
+            ).strip()
+            files = flow.changed_files(repo, base, candidate)
+            self.assertIn("source.py", files)
+            self.assertIn("contest/scripts/new.py", files)
+            self.assertIn("contest/config/old.json", files)
+            self.assertIn("contest/candidate/old.py", files)
+            self.assertIn("contest/scripts/renamed.py", files)
+            with self.assertRaisesRegex(RuntimeError, "contest/scripts/new.py"):
+                flow.enforce_candidate_scope(base, candidate, repo)
+
+    def test_candidate_scope_allows_project_and_candidate_changes(self):
+        self.assertEqual(
+            flow.candidate_scope_violations(
+                ["source/module.cpp", "CMakeLists.txt", "contest/candidate/session.py"]
+            ),
+            [],
+        )
+
+    def test_candidate_scope_rejects_all_protected_contest_paths(self):
+        protected = [
+            "README.md",
+            "contest/scripts/new.py", "contest/config/new.json", "contest/contest.sh",
+            "contest/tests/new_test.py", "contest/image/Dockerfile", "contest/README.md",
+        ]
+        violations = flow.candidate_scope_violations(protected)
+        self.assertEqual(violations, sorted(protected))
+
+    def test_all_defaults_are_unique_and_stage_commands_require_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                mock.patch.object(flow, "DEFAULT_RUNS_ROOT", root / "runs"),
+                mock.patch.dict(os.environ, {"DPA4C_OWNER": "owner/test"}, clear=False),
+            ):
+                first = flow.new_run_root("quick")
+                second = flow.new_run_root("quick")
+            self.assertNotEqual(first, second)
+            self.assertIn("quick", first.name)
+            self.assertEqual(first.parent.name, "owner-test")
+            self.assertTrue(first.is_dir() and second.is_dir())
+        with self.assertRaisesRegex(RuntimeError, "requires explicit --run-root"):
+            flow.execute_command(Namespace(command="build", profile="quick"))
+        with self.assertRaisesRegex(RuntimeError, "requires explicit --assets-root"):
+            flow.execute_command(Namespace(command="build", profile="quick", run_root=Path("/run")))
+
+    def test_all_explicit_paths_take_priority_over_auto_run_root(self):
+        args = Namespace(command="all", profile="quick", starter_ref="base",
+                          run_root=Path("/explicit/run"), assets_root=Path("/explicit/assets"))
+        with (
+            mock.patch.object(flow, "new_run_root", side_effect=AssertionError("auto root used")),
+            mock.patch.object(flow, "build"),
+            mock.patch.object(flow, "test"),
+            mock.patch.object(flow, "benchmark"),
+            mock.patch.object(flow, "candidate_change_status", return_value={"candidate_change": "NO_CANDIDATE_CHANGE"}),
+            mock.patch.object(flow, "write_flow_status"),
+        ):
+            flow.execute_command(args)
+        self.assertEqual(args.run_root, Path("/explicit/run"))
+        self.assertEqual(args.assets_root, Path("/explicit/assets"))
 
     def test_all_order(self):
         calls = []
@@ -791,6 +884,19 @@ class PublicBenchmarkTest(unittest.TestCase):
         self.assertEqual(flow.DEFAULT_STARTER_REF, "dpa4c-ppu-nano-starter-v1.0.0-rc6")
         readme = (Path(__file__).parents[1] / "README.md").read_text()
         self.assertIn("dpa4c-ppu-nano-starter-v1.0.0-rc6", readme)
+
+    def test_contestant_onboarding_docs_bind_image_entrypoint_and_protocols(self):
+        contest_readme = (Path(__file__).parents[1] / "README.md").read_text()
+        root_readme = (Path(__file__).parents[2] / "README.md").read_text()
+        self.assertIn("/opt/dpa4c-contestant-kit", contest_readme)
+        self.assertIn("candidate/my-model", contest_readme)
+        self.assertIn("all --profile quick", contest_readme)
+        self.assertIn("all --profile full", contest_readme)
+        self.assertIn("1 pair", contest_readme)
+        self.assertIn("2 fresh pairs", contest_readme)
+        self.assertIn("20 warmup + 500 measured", contest_readme)
+        self.assertIn("--run-root", contest_readme)
+        self.assertIn("contest/README.md", root_readme)
 
     def test_runtime_image_binds_rc6_tag_and_external_provenance(self):
         dockerfile = (Path(__file__).parents[1] / "image/Dockerfile").read_text()

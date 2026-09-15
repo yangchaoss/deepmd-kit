@@ -18,6 +18,8 @@ and deploy it at simulation scale.**
 [**Model guide**][model-guide] · [**Tutorials**][tutorials] ·
 [**Examples**](./examples) · [**Releases**][releases]
 
+> **DPA4C PPU contestant flow:** see [`contest/README.md`](./contest/README.md).
+
 > [!IMPORTANT]
 > **A pretrained model can be your starting point, not just your end result.**
 > Download a built-in pretrained DPA4 checkpoint, fine-tune the full model for

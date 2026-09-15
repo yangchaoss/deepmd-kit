@@ -18,16 +18,76 @@ failed the isolation gate; rc1, rc2, and rc3 remain history only.
 The organizer calls one tracked entrypoint.  Assets remain external and are
 accepted only at the frozen SHA-256 values in `config/runtime.json`.
 
+The current frozen ref remains rc6 until this onboarding and scope-gate change
+is reviewed and published as a new starter. When it is released, update the
+immutable starter tag, `DEFAULT_STARTER_REF`, and the Runtime Image together;
+do not treat uncommitted organizer edits as an rc6 contestant baseline.
+
 ## Short contestant flow
 
+The Runtime Image already contains the public starter checkout at
+`/opt/dpa4c-contestant-kit`; enter that directory before creating a candidate
+branch. The organization pre-mounts the two fixed assets at
+`/workspace/dpa4c-contest/assets`.
+
 ```text
-clone the public starter (or enter the repository already present in the runtime image)
-  -> mount the two fixed assets under --assets-root
-  -> ./contest/contest.sh all --profile quick
-  -> make and commit the candidate change
-  -> ./contest/contest.sh all --profile full
+enter /opt/dpa4c-contestant-kit
+  -> detach at dpa4c-ppu-nano-starter-v1.0.0-rc6
+  -> create candidate/<name> and commit the candidate change
+  -> run the one-command quick self-test
+  -> run the one-command full self-test
   -> submit the generated eight-file submission directory
 ```
+
+Create a branch for the candidate (replace `my-model` with a short name):
+
+```bash
+cd /opt/dpa4c-contestant-kit
+git switch --detach dpa4c-ppu-nano-starter-v1.0.0-rc6
+git switch -c candidate/my-model
+git config user.name "Contestant"
+git config user.email "contestant@example.invalid"
+```
+
+The one-command entrypoint allocates a fresh, owner-isolated run root outside
+the checkout and prints the resolved path. Quick and full roots are separate,
+and a new root is never reused automatically:
+
+```bash
+cd /opt/dpa4c-contestant-kit
+/usr/local/bin/dpa4c-contestant-flow all --profile quick
+# 1 pair, AB order, 2 warmup + 10 measured; package is skipped
+
+# edit the DeepMD source or contest/candidate implementation, then commit it
+git add <changed-files>
+git commit -m "candidate change"
+
+/usr/local/bin/dpa4c-contestant-flow all --profile full
+# 2 fresh pairs, AB/BA order, 20 warmup + 100 measured; creates the package
+```
+
+The organization mounts the model and structure; do not download or commit
+them. If a staged command is run instead of `all`, it must receive both
+`--run-root` and `--assets-root` explicitly; staged commands never allocate a
+directory implicitly:
+
+```bash
+/usr/local/bin/dpa4c-contestant-flow build \
+  --run-root /workspace/runs/OWNER/RUN_ID \
+  --assets-root /workspace/dpa4c-contest/assets
+```
+
+Quick is a development self-test with `score_type=development_quick` and
+`verified=false`. Full is the public self-test and uses the fixed Nano/1024
+atom/FP32 route. The private organizer evaluation is a separate 20 warmup + 500 measured
+protocol and is not run by this entrypoint.
+
+For a full run with a changed candidate, submit exactly the generated
+eight-file directory under the resolved run root:
+`candidate.patch`, `result.json`, `repeats.json`,
+`measurement-binding.json`, `submission-manifest.json`, `image.json`,
+`CHANGELOG.md`, and `SHA256SUMS`. A full run without a committed candidate
+change may measure successfully but remains `PACKAGE_SKIPPED`.
 
 The organization provides or mounts these files; no download URL is implied:
 

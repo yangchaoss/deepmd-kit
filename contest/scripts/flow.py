@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import argparse
 import csv
+import getpass
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -24,6 +28,8 @@ RUNTIME_REQUIREMENTS = CONTEST / "config" / "runtime-requirements.txt"
 WHEELHOUSE_MANIFEST = CONTEST / "config" / "wheelhouse-manifest.json"
 OUTPUT_CONTRACT = CONTEST / "config" / "output-contract.json"
 DEFAULT_WHEELHOUSE = Path("/opt/dpa4c-contest-wheelhouse")
+DEFAULT_ASSETS_ROOT = Path("/workspace/dpa4c-contest/assets")
+DEFAULT_RUNS_ROOT = Path("/workspace/runs")
 WHEELHOUSE_ENV = "DPA4C_CONTEST_WHEELHOUSE"
 CANDIDATE_MANIFEST = CONTEST / "config" / "submission.json"
 FROZEN_TORCH_VERSION = "2.9.0+ali.10.ppu2.1.0.cu130"
@@ -232,6 +238,43 @@ def require_clean_committed() -> dict[str, str]:
     if status:
         raise RuntimeError(f"candidate checkout is not clean:\n{status}")
     return {"commit": git(["rev-parse", "HEAD"]), "tree": git(["rev-parse", "HEAD^{tree}"])}
+
+
+def _safe_owner() -> str:
+    owner = os.environ.get("DPA4C_OWNER") or os.environ.get("USER") or getpass.getuser()
+    owner = re.sub(r"[^A-Za-z0-9_.-]+", "-", owner).strip("-._")
+    return owner or "owner"
+
+
+def new_run_root(profile: str) -> Path:
+    """Create one unique, profile-labelled run root outside the checkout."""
+    owner_root = DEFAULT_RUNS_ROOT / _safe_owner()
+    owner_root.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    for _ in range(32):
+        candidate = owner_root / f"rc6-{profile}-{stamp}-{uuid.uuid4().hex[:10]}"
+        try:
+            candidate.mkdir()
+        except FileExistsError:
+            continue
+        return candidate
+    raise RuntimeError(f"unable to allocate a unique run root under {owner_root}")
+
+
+def prepare_all_args(args) -> None:
+    if getattr(args, "run_root", None) is None:
+        args.run_root = new_run_root(args.profile)
+    if getattr(args, "assets_root", None) is None:
+        args.assets_root = DEFAULT_ASSETS_ROOT
+
+
+def require_explicit_stage_paths(args) -> None:
+    if getattr(args, "run_root", None) is None:
+        raise RuntimeError(
+            f"{args.command} requires explicit --run-root; only all allocates one automatically"
+        )
+    if getattr(args, "assets_root", None) is None:
+        raise RuntimeError(f"{args.command} requires explicit --assets-root")
 
 
 def resolve_inputs(args) -> tuple[dict[str, object], Path, Path, Path]:
@@ -513,6 +556,8 @@ def runtime_identity_gate(
 def build(args) -> None:
     config, run_root, model, structure = resolve_inputs(args)
     identity = source_identity()
+    starter = git(["rev-parse", f"{args.starter_ref}^{{commit}}"])
+    enforce_candidate_scope(starter, identity["commit"])
     git(["ls-files", "--error-unmatch", str(CANDIDATE_MANIFEST.relative_to(ROOT))])
     git(["ls-files", "--error-unmatch", str(RUNTIME_REQUIREMENTS.relative_to(ROOT))])
     git(["ls-files", "--error-unmatch", str(WHEELHOUSE_MANIFEST.relative_to(ROOT))])
@@ -673,6 +718,8 @@ def benchmark(args) -> None:
     config, run_root, model, structure = resolve_inputs(args)
     profile = profile_config(args.profile)
     current = source_identity()
+    starter_commit = git(["rev-parse", f"{args.starter_ref}^{{commit}}"])
+    enforce_candidate_scope(starter_commit, current["commit"])
     build_status = json.loads((run_root / "results" / "BUILD_STATUS.json").read_text())
     smoke_status = json.loads((run_root / "results" / "SMOKE_STATUS.json").read_text())
     if build_status.get("status") != "PASS" or not same_source(build_status.get("source", {}), current):
@@ -723,7 +770,6 @@ def benchmark(args) -> None:
             "input_manifest": sha256(pair_dir / "input-manifest.json"),
             "reference_manifest": sha256(pair_dir / "reference-manifest.json"),
         }
-    starter_commit = git(["rev-parse", f"{args.starter_ref}^{{commit}}"])
     binding = {
         "schema_version": "dpa4c-ppu-contest.measurement-binding.v2",
         "status": "PASS", "profile": args.profile,
@@ -771,15 +817,37 @@ def benchmark(args) -> None:
 
 def changed_files(repo: Path, starter: str, candidate: str) -> list[str]:
     output = subprocess.check_output(
-        ["git", "-C", str(repo), "diff", "--name-only", "-z", starter, candidate]
+        ["git", "-C", str(repo), "diff", "--name-only", "--no-renames", "-z", starter, candidate]
     )
     return [name.decode() for name in output.split(b"\0") if name]
+
+
+def candidate_scope_violations(files: list[str]) -> list[str]:
+    violations = []
+    for path in files:
+        normalized = Path(path).as_posix()
+        if normalized.startswith("contest/candidate/"):
+            continue
+        if normalized == "README.md" or normalized.startswith("contest/"):
+            violations.append(normalized)
+    return sorted(set(violations))
+
+
+def enforce_candidate_scope(starter: str, candidate: str, repo: Path = ROOT) -> list[str]:
+    files = changed_files(repo, starter, candidate)
+    violations = candidate_scope_violations(files)
+    if violations:
+        raise RuntimeError(
+            "candidate change scope violation (protected paths):\n"
+            + "\n".join(f"- {path}" for path in violations)
+        )
+    return files
 
 
 def candidate_change_status(args) -> dict[str, object]:
     starter = git(["rev-parse", f"{args.starter_ref}^{{commit}}"])
     current = source_identity()
-    files = changed_files(ROOT, starter, current["commit"])
+    files = enforce_candidate_scope(starter, current["commit"])
     return {
         "status": "PASS",
         "candidate_change": "CANDIDATE_CHANGE_PRESENT" if files else "NO_CANDIDATE_CHANGE",
@@ -793,6 +861,7 @@ def write_flow_status(args, payload: dict[str, object]) -> None:
     payload = {
         "schema_version": "dpa4c-ppu-contest.flow-status.v1",
         "profile": args.profile,
+        "run_root": str(args.run_root.resolve()),
         "formal_performance": "NOT_RUN_BY_SCOPE",
         **payload,
     }
@@ -839,12 +908,13 @@ def package(args) -> None:
         raise RuntimeError("PACKAGE_SKIPPED: quick profile never creates a formal submission")
     _, run_root, _, _ = resolve_inputs(args)
     current = source_identity()
+    starter = git(["rev-parse", f"{args.starter_ref}^{{commit}}"])
+    enforce_candidate_scope(starter, current["commit"])
     benchmark_root = run_root / "results" / "public-benchmark"
     benchmark_status = json.loads((benchmark_root / "BENCHMARK_STATUS.json").read_text())
     binding = json.loads((benchmark_root / "measurement-binding.json").read_text())
     if binding.get("profile") != "full":
         raise RuntimeError("PACKAGE_SKIPPED: submission requires a full profile binding")
-    starter = git(["rev-parse", f"{args.starter_ref}^{{commit}}"])
     validate_package_gate(benchmark_status, binding, current, args.starter_ref, starter)
     validate_measurement_binding_artifacts(benchmark_root, binding)
     output = run_root / "submission"
@@ -962,6 +1032,10 @@ def validate_package_gate(
 
 
 def execute_command(args) -> None:
+    if args.command == "all":
+        prepare_all_args(args)
+    else:
+        require_explicit_stage_paths(args)
     if args.command == "build":
         build(args)
     elif args.command == "test":
@@ -1000,8 +1074,14 @@ def execute_command(args) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="DPA4C PPU public contestant source flow")
     parser.add_argument("command", choices=("build", "test", "benchmark", "package", "all", "image"))
-    parser.add_argument("--run-root", type=Path, required=True)
-    parser.add_argument("--assets-root", type=Path, required=True)
+    parser.add_argument(
+        "--run-root", type=Path,
+        help="external run directory; required for staged commands, auto-created for all",
+    )
+    parser.add_argument(
+        "--assets-root", type=Path,
+        help="external model/structure directory; all defaults to /workspace/dpa4c-contest/assets",
+    )
     parser.add_argument("--baseline-python")
     parser.add_argument("--profile", choices=("quick", "full"), default="quick")
     parser.add_argument("--starter-ref", default=DEFAULT_STARTER_REF,
