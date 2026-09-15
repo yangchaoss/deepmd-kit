@@ -41,12 +41,14 @@ class FakeAtoms:
         return 1024
 
 
-def valid_output_fields(frames=2, dtype=np.float64):
+def valid_output_fields(frames=2, dtype=np.float64, warmup=2):
     return {
         "measured_energy_eV": np.zeros((frames,), dtype=dtype),
         "measured_forces": np.zeros((frames, 1024, 3), dtype=dtype),
         "measured_virial": np.zeros((frames, 3, 3), dtype=dtype),
         "measured_stress": np.zeros((frames, 6), dtype=dtype),
+        "warmup_latencies_s": np.ones((warmup,), dtype=dtype),
+        "measured_latencies_s": np.ones((frames,), dtype=dtype),
     }
 
 
@@ -336,6 +338,8 @@ class PublicBenchmarkTest(unittest.TestCase):
                 "measured_forces": np.zeros((2, 1024, 3), dtype=np.float64),
                 "measured_virial": np.zeros((2, 3, 3), dtype=np.float64),
                 "measured_stress": np.zeros((2, 6), dtype=np.float64),
+                "warmup_latencies_s": np.ones(2, dtype=np.float64),
+                "measured_latencies_s": np.ones(2, dtype=np.float64),
             }
             np.savez(reference, **fields)
             broken = dict(fields)
@@ -356,7 +360,9 @@ class PublicBenchmarkTest(unittest.TestCase):
         contract = benchmark.load_output_contract()
         self.assertEqual(contract["measured_dimension"], "N")
         self.assertEqual(contract["atom_count"], 1024)
-        self.assertEqual(set(contract["fields"]), set(benchmark.COMPACT_FIELDS.values()))
+        self.assertEqual(set(contract["fields"]), benchmark.ARCHIVE_FIELDS)
+        self.assertEqual(contract["fields"]["warmup_latencies_s"]["shape"], ["W"])
+        self.assertEqual(contract["fields"]["measured_latencies_s"]["shape"], ["N"])
         for spec in contract["fields"].values():
             self.assertEqual(spec["allowed_dtypes"], ["float64"])
         historical = json.loads((
@@ -430,6 +436,66 @@ class PublicBenchmarkTest(unittest.TestCase):
                                           tolerance, tolerance_path)
             self.assertEqual(raised.exception.status, "BENCHMARK_INVALID")
 
+            timing_shape = valid_output_fields(warmup=3)
+            np.savez(root / "timing-shape.npz", **timing_shape)
+            with self.assertRaises(benchmark.RouteFailure) as raised:
+                benchmark.validate_output(root / "timing-shape.npz", root / "reference.npz",
+                                          root / "timing-shape.json", "candidate", "Pair1",
+                                          tolerance, tolerance_path, warmup=2, measured=2)
+            self.assertEqual(raised.exception.status, "CANDIDATE_INVALID")
+
+            timing_dtype = valid_output_fields(dtype=np.float64)
+            timing_dtype["measured_latencies_s"] = np.ones(2, dtype=np.float32)
+            np.savez(root / "timing-dtype.npz", **timing_dtype)
+            with self.assertRaises(benchmark.RouteFailure) as raised:
+                benchmark.validate_output(root / "timing-dtype.npz", root / "reference.npz",
+                                          root / "timing-dtype.json", "candidate", "Pair1",
+                                          tolerance, tolerance_path, warmup=2, measured=2)
+            self.assertEqual(raised.exception.status, "CANDIDATE_INVALID")
+
+            timing_missing = valid_output_fields()
+            timing_missing.pop("warmup_latencies_s")
+            np.savez(root / "timing-missing.npz", **timing_missing)
+            with self.assertRaises(benchmark.RouteFailure) as raised:
+                benchmark.validate_output(root / "timing-missing.npz", root / "reference.npz",
+                                          root / "timing-missing.json", "candidate", "Pair1",
+                                          tolerance, tolerance_path, warmup=2, measured=2)
+            self.assertEqual(raised.exception.status, "CANDIDATE_INVALID")
+
+            timing_nan = valid_output_fields()
+            timing_nan["measured_latencies_s"][0] = np.nan
+            np.savez(root / "timing-nan.npz", **timing_nan)
+            with self.assertRaises(benchmark.RouteFailure) as raised:
+                benchmark.validate_output(root / "timing-nan.npz", root / "reference.npz",
+                                          root / "timing-nan.json", "candidate", "Pair1",
+                                          tolerance, tolerance_path, warmup=2, measured=2)
+            self.assertEqual(raised.exception.status, "CANDIDATE_INVALID")
+
+            timing_inf = valid_output_fields()
+            timing_inf["measured_latencies_s"][0] = np.inf
+            np.savez(root / "timing-inf.npz", **timing_inf)
+            with self.assertRaises(benchmark.RouteFailure) as raised:
+                benchmark.validate_output(root / "timing-inf.npz", root / "reference.npz",
+                                          root / "timing-inf.json", "candidate", "Pair1",
+                                          tolerance, tolerance_path, warmup=2, measured=2)
+            self.assertEqual(raised.exception.status, "CANDIDATE_INVALID")
+
+            timing_nonpositive = valid_output_fields()
+            timing_nonpositive["warmup_latencies_s"][0] = 0.0
+            np.savez(root / "timing-nonpositive.npz", **timing_nonpositive)
+            with self.assertRaises(benchmark.RouteFailure) as raised:
+                benchmark.validate_output(root / "timing-nonpositive.npz", root / "reference.npz",
+                                          root / "timing-nonpositive.json", "candidate", "Pair1",
+                                          tolerance, tolerance_path, warmup=2, measured=2)
+            self.assertEqual(raised.exception.status, "CANDIDATE_INVALID")
+
+            legal = valid_output_fields()
+            np.savez(root / "legal.npz", **legal)
+            legal_result = benchmark.validate_output(root / "legal.npz", root / "reference.npz",
+                                                     root / "legal.json", "candidate", "Pair1",
+                                                     tolerance, tolerance_path, warmup=2, measured=2)
+            self.assertEqual(legal_result["status"], "PASS")
+
             both_bad = valid_output_fields()
             both_bad["measured_forces"] = np.zeros((2, 1), dtype=np.float64)
             np.savez(root / "both-bad.npz", **both_bad)
@@ -474,6 +540,8 @@ class PublicBenchmarkTest(unittest.TestCase):
                 "measured_forces": np.zeros((1, 1024, 3), dtype=np.float64),
                 "measured_virial": np.zeros((1, 3, 3), dtype=np.float64),
                 "measured_stress": np.zeros((1, 6), dtype=np.float64),
+                "warmup_latencies_s": np.ones(1, dtype=np.float64),
+                "measured_latencies_s": np.ones(1, dtype=np.float64),
             }
             np.savez(root / "reference.npz", **reference_fields)
             inside = dict(reference_fields)
@@ -503,6 +571,7 @@ class PublicBenchmarkTest(unittest.TestCase):
         self.assertEqual(identity["fields"]["virial_eV"]["atol"],
                          0.0006802242146053405)
         self.assertEqual(identity["output_contract"]["atom_count"], 1024)
+        self.assertEqual(identity["output_contract"]["warmup_dimension"], "W")
         self.assertEqual(identity["output_contract"]["sha256"], flow.sha256(flow.OUTPUT_CONTRACT))
 
     def _package_fixture(self, root: Path):

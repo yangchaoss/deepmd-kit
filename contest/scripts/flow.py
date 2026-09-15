@@ -210,6 +210,7 @@ def benchmark_tolerance_identity() -> dict[str, object]:
             "sha256": sha256(OUTPUT_CONTRACT),
             "schema_version": contract["schema_version"],
             "measured_dimension": contract["measured_dimension"],
+            "warmup_dimension": contract["warmup_dimension"],
             "atom_count": contract["atom_count"],
             "fields": contract["fields"],
         },

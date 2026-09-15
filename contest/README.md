@@ -41,8 +41,11 @@ Example asset root: `/workspace/dpa4c-contest/assets` (or pass another
 
 The measured-output contract is controlled by `config/output-contract.json`
 and is recorded by the result, repeats, and measurement binding. It requires
-the exact four fields (`energy`, `forces`, `virial`, `stress`), a measured
-dimension `N`, 1024 atoms, and host `float64` arrays with shapes
+the exact six archive fields: four physics fields (`energy`, `forces`, `virial`,
+`stress`) plus `warmup_latencies_s` and `measured_latencies_s`. Physics uses
+measured dimension `N`, timing uses warmup dimension `W` and measured `N`, and
+all arrays are host `float64`; timing values must be finite and strictly
+positive. The physics shapes are
 `(N,)`, `(N,1024,3)`, `(N,3,3)`, and `(N,6)`. Contract checks run before
 numeric tolerance checks; reference/baseline contract failures invalidate the
 benchmark and candidate contract failures invalidate the candidate.

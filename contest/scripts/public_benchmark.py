@@ -78,6 +78,8 @@ COMPACT_FIELDS = {
     "virial_eV": "measured_virial",
     "stress_eV_per_A3": "measured_stress",
 }
+TIMING_FIELDS = ("warmup_latencies_s", "measured_latencies_s")
+ARCHIVE_FIELDS = set(COMPACT_FIELDS.values()) | set(TIMING_FIELDS)
 
 
 def load_output_contract(path: Path = OUTPUT_CONTRACT_PATH) -> dict[str, object]:
@@ -85,15 +87,23 @@ def load_output_contract(path: Path = OUTPUT_CONTRACT_PATH) -> dict[str, object]
     if config.get("schema_version") != "dpa4c-ppu-contest.output-contract.v1":
         raise RuntimeError("unsupported output contract schema")
     fields = config.get("fields")
-    if not isinstance(fields, dict) or set(fields) != set(COMPACT_FIELDS.values()):
+    if not isinstance(fields, dict) or set(fields) != ARCHIVE_FIELDS:
         raise RuntimeError("output contract fields are incomplete")
-    if config.get("measured_dimension") != "N" or int(config.get("atom_count", -1)) != 1024:
+    if (config.get("measured_dimension") != "N"
+            or config.get("warmup_dimension") != "W"
+            or int(config.get("atom_count", -1)) != 1024):
         raise RuntimeError("output contract dimensions are invalid")
     for name, spec in fields.items():
         if not isinstance(spec, dict) or not isinstance(spec.get("shape"), list):
             raise RuntimeError(f"output contract shape is invalid for {name}")
         if not spec.get("allowed_dtypes"):
             raise RuntimeError(f"output contract dtype is missing for {name}")
+        if spec.get("category") not in {"physics", "timing"}:
+            raise RuntimeError(f"output contract category is invalid for {name}")
+        if name in TIMING_FIELDS and (spec["category"] != "timing" or spec.get("positive") is not True):
+            raise RuntimeError(f"output contract timing rule is invalid for {name}")
+        if name in COMPACT_FIELDS.values() and spec["category"] != "physics":
+            raise RuntimeError(f"output contract physics rule is invalid for {name}")
     return config
 
 
@@ -104,6 +114,7 @@ def output_contract_identity(path: Path = OUTPUT_CONTRACT_PATH) -> dict[str, obj
         "sha256": sha256(path),
         "schema_version": config["schema_version"],
         "measured_dimension": config["measured_dimension"],
+        "warmup_dimension": config["warmup_dimension"],
         "atom_count": config["atom_count"],
         "fields": config["fields"],
     }
@@ -415,7 +426,9 @@ def _per_frame_max(value: np.ndarray) -> np.ndarray:
 def validate_output(actual_path: Path, reference_path: Path, output: Path,
                     route: str, pair_id: str, tolerance: dict[str, object],
                     tolerance_path: Path,
-                    output_contract: dict[str, object] | None = None) -> dict[str, object]:
+                    output_contract: dict[str, object] | None = None,
+                    *, warmup: int | None = None,
+                    measured: int | None = None) -> dict[str, object]:
     actual = np.load(actual_path)
     reference = np.load(reference_path)
     output_contract = output_contract or load_output_contract()
@@ -426,32 +439,65 @@ def validate_output(actual_path: Path, reference_path: Path, output: Path,
         actual_fields = set(data.files)
         if actual_fields != expected_fields:
             raise RouteFailure(role, f"{role} output field set mismatch: {sorted(actual_fields)}")
-        measured = None
+        measured_frames = None
         info = {}
-        for field_name in sorted(expected_fields):
-            value = data[field_name]
+
+        def check_field(field_name: str, value: np.ndarray, expected_shape: tuple[int, ...]) -> None:
             spec = output_contract["fields"][field_name]
             if value.ndim == 0:
                 raise RouteFailure(role, f"{role} {field_name} is scalar")
-            if measured is None:
-                measured = int(value.shape[0])
-            elif int(value.shape[0]) != measured:
-                raise RouteFailure(role, f"{role} measured frame dimension is inconsistent")
-            expected_shape = tuple(
-                measured if dimension == "N" else int(dimension)
-                for dimension in spec["shape"]
-            )
             if tuple(value.shape) != expected_shape:
                 raise RouteFailure(role, f"{role} {field_name} shape {list(value.shape)} != {list(expected_shape)}")
             if str(value.dtype) not in set(spec["allowed_dtypes"]):
                 raise RouteFailure(role, f"{role} {field_name} dtype {value.dtype} is not allowed")
             if not bool(np.isfinite(value).all()):
                 raise RouteFailure(role, f"{role} {field_name} contains non-finite values")
+            if spec.get("positive") is True and not bool(np.all(value > 0)):
+                raise RouteFailure(role, f"{role} {field_name} must be finite and strictly positive")
             info[field_name] = {"shape": list(value.shape), "dtype": str(value.dtype), "finite": True}
+
+        for field_name in sorted(COMPACT_FIELDS.values()):
+            value = data[field_name]
+            if value.ndim == 0:
+                raise RouteFailure(role, f"{role} {field_name} is scalar")
+            if measured_frames is None:
+                measured_frames = int(value.shape[0])
+            elif int(value.shape[0]) != measured_frames:
+                raise RouteFailure(role, f"{role} measured frame dimension is inconsistent")
+        if measured is not None and measured_frames != int(measured):
+            raise RouteFailure(role, f"{role} measured frame dimension {measured_frames} != protocol {measured}")
+        if measured_frames is None or measured_frames <= 0:
+            raise RouteFailure(role, f"{role} measured frame dimension is invalid")
+
+        for field_name in sorted(COMPACT_FIELDS.values()):
+            value = data[field_name]
+            spec = output_contract["fields"][field_name]
+            expected_shape = tuple(
+                measured_frames if dimension == "N" else int(dimension)
+                for dimension in spec["shape"]
+            )
+            check_field(field_name, value, expected_shape)
+
+        warmup_frames = int(warmup) if warmup is not None else None
+        if warmup_frames is not None and warmup_frames <= 0:
+            raise RouteFailure(role, f"{role} warmup frame dimension is invalid")
+        for field_name in TIMING_FIELDS:
+            value = data[field_name]
+            if value.ndim == 0:
+                raise RouteFailure(role, f"{role} {field_name} is scalar")
+            if warmup_frames is None and field_name == "warmup_latencies_s":
+                warmup_frames = int(value.shape[0])
+            expected_count = warmup_frames if field_name == "warmup_latencies_s" else measured_frames
+            check_field(field_name, value, (expected_count,))
         return info
 
     reference_contract = validate_contract(reference, "reference")
     actual_contract = validate_contract(actual, route)
+    for field_name in TIMING_FIELDS:
+        if actual[field_name].shape != reference[field_name].shape:
+            raise RouteFailure(route, f"{route} {field_name} shape mismatch")
+        if actual[field_name].dtype != reference[field_name].dtype:
+            raise RouteFailure(route, f"{route} {field_name} dtype mismatch")
     checks: dict[str, object] = {}
     passed = True
     for tolerance_name, key in fields.items():
@@ -566,7 +612,8 @@ def run_benchmark(args) -> dict[str, object]:
             correctness = validate_output(route_path, reference_path,
                                           pair_dir / f"{route}.correctness.json",
                                           route, pair_id, tolerance, args.benchmark_tolerance,
-                                          output_contract)
+                                          output_contract, warmup=args.warmup,
+                                          measured=args.measured)
             write_latency_csv(pair_dir / f"{route}.latency.csv", route_path, pair_id,
                               route, pair_result["order"])
             record = {"pair_id": pair_id, "order": pair_result["order"], "route": route,
