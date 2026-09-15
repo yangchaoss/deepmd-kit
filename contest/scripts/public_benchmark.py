@@ -21,6 +21,7 @@ import numpy as np
 PROTOCOL = "dpa4c-ppu-contest.public-benchmark.v2"
 PUBLIC_SEEDS = (510421, 620531, 730637)
 PAIR_ORDERS = (("baseline", "candidate"), ("candidate", "baseline"))
+OUTPUT_CONTRACT_PATH = Path(__file__).resolve().parents[1] / "config" / "output-contract.json"
 
 
 def aggregation_method(profile: str) -> str:
@@ -77,6 +78,35 @@ COMPACT_FIELDS = {
     "virial_eV": "measured_virial",
     "stress_eV_per_A3": "measured_stress",
 }
+
+
+def load_output_contract(path: Path = OUTPUT_CONTRACT_PATH) -> dict[str, object]:
+    config = json.loads(path.read_text())
+    if config.get("schema_version") != "dpa4c-ppu-contest.output-contract.v1":
+        raise RuntimeError("unsupported output contract schema")
+    fields = config.get("fields")
+    if not isinstance(fields, dict) or set(fields) != set(COMPACT_FIELDS.values()):
+        raise RuntimeError("output contract fields are incomplete")
+    if config.get("measured_dimension") != "N" or int(config.get("atom_count", -1)) != 1024:
+        raise RuntimeError("output contract dimensions are invalid")
+    for name, spec in fields.items():
+        if not isinstance(spec, dict) or not isinstance(spec.get("shape"), list):
+            raise RuntimeError(f"output contract shape is invalid for {name}")
+        if not spec.get("allowed_dtypes"):
+            raise RuntimeError(f"output contract dtype is missing for {name}")
+    return config
+
+
+def output_contract_identity(path: Path = OUTPUT_CONTRACT_PATH) -> dict[str, object]:
+    config = load_output_contract(path)
+    return {
+        "path": str(path.resolve()),
+        "sha256": sha256(path),
+        "schema_version": config["schema_version"],
+        "measured_dimension": config["measured_dimension"],
+        "atom_count": config["atom_count"],
+        "fields": config["fields"],
+    }
 
 
 def _compact_correctness_summary(pairs: list[dict[str, object]]) -> dict[str, object]:
@@ -249,6 +279,7 @@ def compact_public_result(
         },
         "aggregation_method": method,
         "benchmark_tolerance": aggregate.get("benchmark_tolerance"),
+        "output_contract": aggregate.get("output_contract"),
         "pair_speedups_candidate_over_baseline": pair_speedups,
         ("paired_geometric_mean_speedup" if method == "paired_geometric_mean_speedup"
          else "paired_speedup"): aggregate_speedup if status == "PASS" else None,
@@ -383,18 +414,47 @@ def _per_frame_max(value: np.ndarray) -> np.ndarray:
 
 def validate_output(actual_path: Path, reference_path: Path, output: Path,
                     route: str, pair_id: str, tolerance: dict[str, object],
-                    tolerance_path: Path) -> dict[str, object]:
+                    tolerance_path: Path,
+                    output_contract: dict[str, object] | None = None) -> dict[str, object]:
     actual = np.load(actual_path)
     reference = np.load(reference_path)
-    fields = {
-        "energy_eV": "measured_energy_eV", "forces_eV_per_A": "measured_forces",
-        "virial_eV": "measured_virial", "stress_eV_per_A3": "measured_stress",
-    }
+    output_contract = output_contract or load_output_contract()
+    fields = COMPACT_FIELDS
+
+    def validate_contract(data, role: str) -> dict[str, object]:
+        expected_fields = set(output_contract["fields"])
+        actual_fields = set(data.files)
+        if actual_fields != expected_fields:
+            raise RouteFailure(role, f"{role} output field set mismatch: {sorted(actual_fields)}")
+        measured = None
+        info = {}
+        for field_name in sorted(expected_fields):
+            value = data[field_name]
+            spec = output_contract["fields"][field_name]
+            if value.ndim == 0:
+                raise RouteFailure(role, f"{role} {field_name} is scalar")
+            if measured is None:
+                measured = int(value.shape[0])
+            elif int(value.shape[0]) != measured:
+                raise RouteFailure(role, f"{role} measured frame dimension is inconsistent")
+            expected_shape = tuple(
+                measured if dimension == "N" else int(dimension)
+                for dimension in spec["shape"]
+            )
+            if tuple(value.shape) != expected_shape:
+                raise RouteFailure(role, f"{role} {field_name} shape {list(value.shape)} != {list(expected_shape)}")
+            if str(value.dtype) not in set(spec["allowed_dtypes"]):
+                raise RouteFailure(role, f"{role} {field_name} dtype {value.dtype} is not allowed")
+            if not bool(np.isfinite(value).all()):
+                raise RouteFailure(role, f"{role} {field_name} contains non-finite values")
+            info[field_name] = {"shape": list(value.shape), "dtype": str(value.dtype), "finite": True}
+        return info
+
+    reference_contract = validate_contract(reference, "reference")
+    actual_contract = validate_contract(actual, route)
     checks: dict[str, object] = {}
     passed = True
     for tolerance_name, key in fields.items():
-        if key not in actual.files or key not in reference.files:
-            raise RouteFailure(route, f"{route} missing result field {key}")
         a, b = actual[key], reference[key]
         if a.shape != b.shape or a.dtype != b.dtype:
             raise RouteFailure(route, f"{route} {key} shape/dtype mismatch")
@@ -413,6 +473,10 @@ def validate_output(actual_path: Path, reference_path: Path, output: Path,
         "BENCHMARK_INVALID" if route == "baseline" else "CANDIDATE_INVALID")
     result = {"schema_version": "dpa4c-ppu-contest.correctness.v1",
               "pair_id": pair_id, "route": route, "status": status,
+              "output_contract": output_contract_identity(
+                  OUTPUT_CONTRACT_PATH
+              ),
+              "contract": {"reference": reference_contract, "actual": actual_contract},
               "tolerance": {"path": str(tolerance_path.resolve()),
                             "sha256": sha256(tolerance_path),
                             "tolerance_id": tolerance["tolerance_id"],
@@ -452,6 +516,8 @@ def run_benchmark(args) -> dict[str, object]:
               "formal_performance": "NOT_RUN_BY_SCOPE"}
     write_json(status_path, status)
     tolerance = load_tolerance(args.benchmark_tolerance)
+    output_contract = load_output_contract()
+    output_contract_id = output_contract_identity()
     tolerance_identity = {"path": str(args.benchmark_tolerance.resolve()),
                           "sha256": sha256(args.benchmark_tolerance),
                           "tolerance_id": tolerance["tolerance_id"],
@@ -499,7 +565,8 @@ def run_benchmark(args) -> dict[str, object]:
                                    warmup=args.warmup, measured=args.measured, env=env)
             correctness = validate_output(route_path, reference_path,
                                           pair_dir / f"{route}.correctness.json",
-                                          route, pair_id, tolerance, args.benchmark_tolerance)
+                                          route, pair_id, tolerance, args.benchmark_tolerance,
+                                          output_contract)
             write_latency_csv(pair_dir / f"{route}.latency.csv", route_path, pair_id,
                               route, pair_result["order"])
             record = {"pair_id": pair_id, "order": pair_result["order"], "route": route,
@@ -550,6 +617,7 @@ def run_benchmark(args) -> dict[str, object]:
                  "measured": args.measured,
                  "aggregation_method": method,
                  "benchmark_tolerance": tolerance_identity,
+                 "output_contract": output_contract_id,
                  "pair_speedups_candidate_over_baseline": speedups, "pairs": pair_records}
     aggregate["paired_geometric_mean_speedup" if method == "paired_geometric_mean_speedup"
               else "paired_speedup"] = aggregate_speedup
@@ -565,6 +633,7 @@ def run_benchmark(args) -> dict[str, object]:
         "warmup": args.warmup,
         "measured": args.measured,
         "aggregation_method": method,
+        "output_contract": output_contract_id,
         "routes": records,
     })
     write_json(root / "result.json", compact_public_result(

@@ -18,7 +18,7 @@ RUN set -eux; \
     for attempt in 1 2 3; do \
       git -c http.version=HTTP/1.1 clone \
         --depth 1 \
-        --branch dpa4c-ppu-nano-starter-v1.0.0-rc4 \
+        --branch dpa4c-ppu-nano-starter-v1.0.0-rc5 \
         --single-branch \
         https://github.com/yangchaoss/deepmd-kit.git \
         "$DPA4C_CONTESTANT_ROOT" && break; \
@@ -27,7 +27,7 @@ RUN set -eux; \
       sleep 5; \
     done; \
     test "$(git -C "$DPA4C_CONTESTANT_ROOT" remote get-url origin)" = "https://github.com/yangchaoss/deepmd-kit.git"; \
-    test "$(git -C "$DPA4C_CONTESTANT_ROOT" describe --exact-match --tags --match 'dpa4c-ppu-nano-starter-v1.0.0-rc4')" = "dpa4c-ppu-nano-starter-v1.0.0-rc4"; \
+    test "$(git -C "$DPA4C_CONTESTANT_ROOT" describe --exact-match --tags --match 'dpa4c-ppu-nano-starter-v1.0.0-rc5')" = "dpa4c-ppu-nano-starter-v1.0.0-rc5"; \
     if git -C "$DPA4C_CONTESTANT_ROOT" symbolic-ref -q HEAD >/dev/null; then \
       echo 'expected detached HEAD after immutable tag checkout' >&2; exit 1; \
     fi; \
@@ -53,8 +53,8 @@ RUN set -eux; \
     test -x /usr/local/bin/dpa4c-contestant-flow
 
 LABEL org.opencontainers.image.source="https://github.com/yangchaoss/deepmd-kit" \
-      org.opencontainers.image.version="dpa4c-ppu-nano-starter-v1.0.0-rc4" \
-      com.dptech.dpa4c.source-tag="dpa4c-ppu-nano-starter-v1.0.0-rc4" \
+      org.opencontainers.image.version="dpa4c-ppu-nano-starter-v1.0.0-rc5" \
+      com.dptech.dpa4c.source-tag="dpa4c-ppu-nano-starter-v1.0.0-rc5" \
       com.dptech.dpa4c.source-provenance="resolved-head-tree-in-build-log-and-release-manifest" \
       com.dptech.dpa4c.runtime-base="registry.dp.tech/dptech/dp/native/prod-27666/4553069/dpa4c-nano-rc1-runtime-probe:20260911-yangchao-r1@sha256:f475eb7a0488b8785818b506fc17e9c411b7ef526fdae2d974c62a5c42937061" \
       com.dptech.dpa4c.runtime-contract="ppu-sdk-2.1_cuda-13.0_torch-2.9.0" \

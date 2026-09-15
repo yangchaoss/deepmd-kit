@@ -3,7 +3,7 @@
 This file is the only authoritative contestant-facing contract for the Nano
 PPU flow. The starter repository is
 `https://github.com/yangchaoss/deepmd-kit.git`; the immutable starter ref is
-`dpa4c-ppu-nano-starter-v1.0.0-rc4`. Resolve that tag to record the exact
+`dpa4c-ppu-nano-starter-v1.0.0-rc5`. Resolve that tag to record the exact
 commit and tree used by a run. Historical files under
 `examples/ppu/dpa4c_nano_rc1/` are compatibility material only and do not
 define a second submission contract.
@@ -39,11 +39,19 @@ The organization provides or mounts these files; no download URL is implied:
 Example asset root: `/workspace/dpa4c-contest/assets` (or pass another
 `--assets-root`). Missing files or SHA mismatches fail before build/compute.
 
+The measured-output contract is controlled by `config/output-contract.json`
+and is recorded by the result, repeats, and measurement binding. It requires
+the exact four fields (`energy`, `forces`, `virial`, `stress`), a measured
+dimension `N`, 1024 atoms, and host `float64` arrays with shapes
+`(N,)`, `(N,1024,3)`, `(N,3,3)`, and `(N,6)`. Contract checks run before
+numeric tolerance checks; reference/baseline contract failures invalidate the
+benchmark and candidate contract failures invalidate the candidate.
+
 ```bash
 ./contest/contest.sh build --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets
 ./contest/contest.sh test  --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets
-./contest/contest.sh benchmark --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc4
-./contest/contest.sh package --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc4
+./contest/contest.sh benchmark --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc5
+./contest/contest.sh package --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc5
 ```
 
 The default profile is `quick`: one public baseline/candidate pair with 2

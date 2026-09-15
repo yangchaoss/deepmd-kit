@@ -22,12 +22,13 @@ BENCHMARK_TOLERANCE = CONTEST / "config" / "benchmark-tolerance.json"
 BUILD_REQUIREMENTS = CONTEST / "config" / "build-requirements.txt"
 RUNTIME_REQUIREMENTS = CONTEST / "config" / "runtime-requirements.txt"
 WHEELHOUSE_MANIFEST = CONTEST / "config" / "wheelhouse-manifest.json"
+OUTPUT_CONTRACT = CONTEST / "config" / "output-contract.json"
 DEFAULT_WHEELHOUSE = Path("/opt/dpa4c-contest-wheelhouse")
 WHEELHOUSE_ENV = "DPA4C_CONTEST_WHEELHOUSE"
 CANDIDATE_MANIFEST = CONTEST / "config" / "submission.json"
 FROZEN_TORCH_VERSION = "2.9.0+ali.10.ppu2.1.0.cu130"
 FROZEN_TORCH_ROOT = Path("/opt/ac2")
-DEFAULT_STARTER_REF = "dpa4c-ppu-nano-starter-v1.0.0-rc4"
+DEFAULT_STARTER_REF = "dpa4c-ppu-nano-starter-v1.0.0-rc5"
 BENCHMARK_WORKER = CONTEST / "scripts" / "public_route_worker.py"
 BENCHMARK_RUNNER = CONTEST / "scripts" / "public_benchmark.py"
 BINARY_IMPLEMENTATION_SUFFIXES = {".so", ".o", ".a", ".whl"}
@@ -194,6 +195,7 @@ def tracked_manifest_sha() -> str:
 
 def benchmark_tolerance_identity() -> dict[str, object]:
     config = json.loads(BENCHMARK_TOLERANCE.read_text())
+    contract = json.loads(OUTPUT_CONTRACT.read_text())
     return {
         "path": str(BENCHMARK_TOLERANCE.relative_to(ROOT)),
         "sha256": sha256(BENCHMARK_TOLERANCE),
@@ -203,6 +205,14 @@ def benchmark_tolerance_identity() -> dict[str, object]:
         "interpretation": config["interpretation"],
         "derivation": config["derivation"],
         "source": config["source"],
+        "output_contract": {
+            "path": str(OUTPUT_CONTRACT.relative_to(ROOT)),
+            "sha256": sha256(OUTPUT_CONTRACT),
+            "schema_version": contract["schema_version"],
+            "measured_dimension": contract["measured_dimension"],
+            "atom_count": contract["atom_count"],
+            "fields": contract["fields"],
+        },
     }
 
 
@@ -418,6 +428,7 @@ def build_input_identity(
         "build_requirements_sha256": sha256(BUILD_REQUIREMENTS),
         "runtime_requirements_sha256": sha256(RUNTIME_REQUIREMENTS),
         "wheelhouse_manifest_sha256": sha256(WHEELHOUSE_MANIFEST),
+        "output_contract_sha256": sha256(OUTPUT_CONTRACT),
         "wheelhouse_path": wheelhouse["path"],
         "wheelhouse_locks": {
             group: {
@@ -504,6 +515,7 @@ def build(args) -> None:
     git(["ls-files", "--error-unmatch", str(CANDIDATE_MANIFEST.relative_to(ROOT))])
     git(["ls-files", "--error-unmatch", str(RUNTIME_REQUIREMENTS.relative_to(ROOT))])
     git(["ls-files", "--error-unmatch", str(WHEELHOUSE_MANIFEST.relative_to(ROOT))])
+    git(["ls-files", "--error-unmatch", str(OUTPUT_CONTRACT.relative_to(ROOT))])
     wheelhouse_identity = resolve_wheelhouse()
     wheelhouse = Path(wheelhouse_identity["path"])
     baseline_python = Path(args.baseline_python or config["baseline_python"])
@@ -833,6 +845,7 @@ def package(args) -> None:
         raise RuntimeError("PACKAGE_SKIPPED: submission requires a full profile binding")
     starter = git(["rev-parse", f"{args.starter_ref}^{{commit}}"])
     validate_package_gate(benchmark_status, binding, current, args.starter_ref, starter)
+    validate_measurement_binding_artifacts(benchmark_root, binding)
     output = run_root / "submission"
     if output.exists():
         raise RuntimeError(f"submission output already exists: {output}")
@@ -866,6 +879,52 @@ def package(args) -> None:
     )
     if {path.name for path in output.iterdir()} != SUBMISSION_FILES:
         raise RuntimeError("submission output set differs from fixed contract")
+
+
+def _safe_binding_artifact_path(root: Path, relative_path: str) -> Path:
+    candidate = Path(relative_path)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise RuntimeError(f"measurement binding artifact path escapes benchmark root: {relative_path}")
+    resolved_root = root.resolve()
+    resolved = (root / candidate).resolve()
+    try:
+        resolved.relative_to(resolved_root)
+    except ValueError as exc:
+        raise RuntimeError(f"measurement binding artifact path escapes benchmark root: {relative_path}") from exc
+    if not resolved.is_file():
+        raise RuntimeError(f"measurement binding artifact is missing: {relative_path}")
+    return resolved
+
+
+def validate_measurement_binding_artifacts(
+    benchmark_root: Path, binding: dict[str, object]
+) -> dict[str, object]:
+    artifacts = binding.get("output_artifacts")
+    if not isinstance(artifacts, dict) or not artifacts:
+        raise RuntimeError("measurement binding output_artifacts are missing")
+    result = binding.get("result")
+    if not isinstance(result, dict) or not isinstance(result.get("path"), str):
+        raise RuntimeError("measurement binding result path is missing")
+    result_path = Path(str(result["path"])).resolve()
+    try:
+        result_path.relative_to(benchmark_root.resolve())
+    except ValueError as exc:
+        raise RuntimeError("measurement binding result path escapes benchmark root") from exc
+    if result_path != (benchmark_root / "result.json").resolve() or not result_path.is_file():
+        raise RuntimeError("measurement binding result.json is missing or misplaced")
+    result_expected = result.get("sha256")
+    if not isinstance(result_expected, str) or sha256(result_path) != result_expected:
+        raise RuntimeError("measurement binding result.json SHA mismatch")
+    checked = {}
+    for relative_path, expected in sorted(artifacts.items()):
+        if not isinstance(relative_path, str) or not isinstance(expected, str):
+            raise RuntimeError("measurement binding output_artifacts entry is malformed")
+        path = _safe_binding_artifact_path(benchmark_root, relative_path)
+        actual = sha256(path)
+        if actual != expected:
+            raise RuntimeError(f"measurement binding artifact SHA mismatch: {relative_path}")
+        checked[relative_path] = actual
+    return {"status": "PASS", "count": len(checked), "artifacts": checked}
 
 
 def image_status(args) -> None:

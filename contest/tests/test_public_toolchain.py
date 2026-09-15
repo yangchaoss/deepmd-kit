@@ -41,6 +41,15 @@ class FakeAtoms:
         return 1024
 
 
+def valid_output_fields(frames=2, dtype=np.float64):
+    return {
+        "measured_energy_eV": np.zeros((frames,), dtype=dtype),
+        "measured_forces": np.zeros((frames, 1024, 3), dtype=dtype),
+        "measured_virial": np.zeros((frames, 3, 3), dtype=dtype),
+        "measured_stress": np.zeros((frames, 6), dtype=dtype),
+    }
+
+
 def synthetic_aggregate() -> dict[str, object]:
     fields = {
         "measured_energy_eV": ([4], "float64", 0.001),
@@ -324,9 +333,9 @@ class PublicBenchmarkTest(unittest.TestCase):
             actual = root / "actual.npz"
             fields = {
                 "measured_energy_eV": np.zeros(2, dtype=np.float64),
-                "measured_forces": np.zeros((2, 1024, 3), dtype=np.float32),
-                "measured_virial": np.zeros((2, 3, 3), dtype=np.float32),
-                "measured_stress": np.zeros((2, 6), dtype=np.float32),
+                "measured_forces": np.zeros((2, 1024, 3), dtype=np.float64),
+                "measured_virial": np.zeros((2, 3, 3), dtype=np.float64),
+                "measured_stress": np.zeros((2, 6), dtype=np.float64),
             }
             np.savez(reference, **fields)
             broken = dict(fields)
@@ -342,6 +351,102 @@ class PublicBenchmarkTest(unittest.TestCase):
                                                    tolerance_path)
             self.assertEqual(baseline["status"], "BENCHMARK_INVALID")
             self.assertEqual(candidate["status"], "CANDIDATE_INVALID")
+
+    def test_output_contract_matches_historical_nano_evidence(self):
+        contract = benchmark.load_output_contract()
+        self.assertEqual(contract["measured_dimension"], "N")
+        self.assertEqual(contract["atom_count"], 1024)
+        self.assertEqual(set(contract["fields"]), set(benchmark.COMPACT_FIELDS.values()))
+        for spec in contract["fields"].values():
+            self.assertEqual(spec["allowed_dtypes"], ["float64"])
+        historical = json.loads((
+            Path(__file__).parents[2].parent
+            / "dpa4c-nano-rc4-final-regression-20260915-evidence"
+            / "results/public-benchmark/Pair1/baseline.correctness.json"
+        ).read_text())
+        self.assertEqual(historical["checks"]["measured_energy_eV"]["shape"], [500])
+        self.assertEqual(historical["checks"]["measured_forces"]["shape"], [500, 1024, 3])
+        self.assertEqual(historical["checks"]["measured_virial"]["shape"], [500, 3, 3])
+        self.assertEqual(historical["checks"]["measured_stress"]["shape"], [500, 6])
+
+    def test_output_contract_rejects_wrong_shape_dtype_fields_and_nan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tolerance_path = Path(__file__).parents[1] / "config/benchmark-tolerance.json"
+            tolerance = benchmark.load_tolerance(tolerance_path)
+            reference_fields = valid_output_fields()
+            np.savez(root / "reference.npz", **reference_fields)
+
+            wrong_shape = valid_output_fields()
+            wrong_shape["measured_forces"] = np.zeros((2, 1), dtype=np.float64)
+            np.savez(root / "wrong-shape.npz", **wrong_shape)
+            with self.assertRaises(benchmark.RouteFailure) as raised:
+                benchmark.validate_output(root / "wrong-shape.npz", root / "reference.npz",
+                                          root / "wrong-shape.json", "candidate", "Pair1",
+                                          tolerance, tolerance_path)
+            self.assertEqual(raised.exception.status, "CANDIDATE_INVALID")
+
+            wrong_dtype = valid_output_fields(dtype=np.float32)
+            np.savez(root / "wrong-dtype.npz", **wrong_dtype)
+            with self.assertRaises(benchmark.RouteFailure) as raised:
+                benchmark.validate_output(root / "wrong-dtype.npz", root / "reference.npz",
+                                          root / "wrong-dtype.json", "candidate", "Pair1",
+                                          tolerance, tolerance_path)
+            self.assertEqual(raised.exception.status, "CANDIDATE_INVALID")
+
+            missing = valid_output_fields()
+            missing.pop("measured_stress")
+            np.savez(root / "missing.npz", **missing)
+            with self.assertRaises(benchmark.RouteFailure) as raised:
+                benchmark.validate_output(root / "missing.npz", root / "reference.npz",
+                                          root / "missing.json", "candidate", "Pair1",
+                                          tolerance, tolerance_path)
+            self.assertEqual(raised.exception.status, "CANDIDATE_INVALID")
+
+            extra = valid_output_fields()
+            extra["extra"] = np.zeros(2, dtype=np.float64)
+            np.savez(root / "extra.npz", **extra)
+            with self.assertRaises(benchmark.RouteFailure) as raised:
+                benchmark.validate_output(root / "extra.npz", root / "reference.npz",
+                                          root / "extra.json", "candidate", "Pair1",
+                                          tolerance, tolerance_path)
+            self.assertEqual(raised.exception.status, "CANDIDATE_INVALID")
+
+            nan = valid_output_fields()
+            nan["measured_energy_eV"][0] = np.nan
+            np.savez(root / "nan.npz", **nan)
+            with self.assertRaises(benchmark.RouteFailure) as raised:
+                benchmark.validate_output(root / "nan.npz", root / "reference.npz",
+                                          root / "nan.json", "candidate", "Pair1",
+                                          tolerance, tolerance_path)
+            self.assertEqual(raised.exception.status, "CANDIDATE_INVALID")
+
+            bad_reference = valid_output_fields()
+            bad_reference["measured_forces"] = np.zeros((2, 1), dtype=np.float64)
+            np.savez(root / "bad-reference.npz", **bad_reference)
+            with self.assertRaises(benchmark.RouteFailure) as raised:
+                benchmark.validate_output(root / "reference.npz", root / "bad-reference.npz",
+                                          root / "bad-reference.json", "candidate", "Pair1",
+                                          tolerance, tolerance_path)
+            self.assertEqual(raised.exception.status, "BENCHMARK_INVALID")
+
+            both_bad = valid_output_fields()
+            both_bad["measured_forces"] = np.zeros((2, 1), dtype=np.float64)
+            np.savez(root / "both-bad.npz", **both_bad)
+            with self.assertRaises(benchmark.RouteFailure) as raised:
+                benchmark.validate_output(root / "both-bad.npz", root / "both-bad.npz",
+                                          root / "both-bad.json", "candidate", "Pair1",
+                                          tolerance, tolerance_path)
+            self.assertEqual(raised.exception.status, "BENCHMARK_INVALID")
+
+            bad_reference_nan = valid_output_fields()
+            bad_reference_nan["measured_energy_eV"][0] = np.nan
+            np.savez(root / "bad-reference-nan.npz", **bad_reference_nan)
+            with self.assertRaises(benchmark.RouteFailure) as raised:
+                benchmark.validate_output(root / "reference.npz", root / "bad-reference-nan.npz",
+                                          root / "bad-reference-nan.json", "candidate", "Pair1",
+                                          tolerance, tolerance_path)
+            self.assertEqual(raised.exception.status, "BENCHMARK_INVALID")
 
     def test_smoke_and_benchmark_tolerances_are_separate(self):
         runtime = json.loads((Path(__file__).parents[1] / "config/runtime.json").read_text())
@@ -366,7 +471,7 @@ class PublicBenchmarkTest(unittest.TestCase):
             rtol = tolerance["fields"]["energy_eV"]["rtol"]
             reference_fields = {
                 "measured_energy_eV": np.asarray([1.0e10], dtype=np.float64),
-                "measured_forces": np.zeros((1, 1, 3), dtype=np.float64),
+                "measured_forces": np.zeros((1, 1024, 3), dtype=np.float64),
                 "measured_virial": np.zeros((1, 3, 3), dtype=np.float64),
                 "measured_stress": np.zeros((1, 6), dtype=np.float64),
             }
@@ -397,6 +502,73 @@ class PublicBenchmarkTest(unittest.TestCase):
         self.assertEqual(identity["sha256"], flow.sha256(flow.BENCHMARK_TOLERANCE))
         self.assertEqual(identity["fields"]["virial_eV"]["atol"],
                          0.0006802242146053405)
+        self.assertEqual(identity["output_contract"]["atom_count"], 1024)
+        self.assertEqual(identity["output_contract"]["sha256"], flow.sha256(flow.OUTPUT_CONTRACT))
+
+    def _package_fixture(self, root: Path):
+        run_root = root / "run-root"
+        benchmark_root = run_root / "results/public-benchmark"
+        benchmark_root.mkdir(parents=True)
+        result = benchmark_root / "result.json"
+        repeats = benchmark_root / "repeats.json"
+        result.write_text('{"status":"PASS"}\n')
+        repeats.write_text('{"status":"PASS"}\n')
+        binding = {
+            "status": "PASS", "profile": "full", "verified": False,
+            "source": {"commit": "candidate", "tree": "tree"},
+            "starter": {"ref": "base", "resolved_commit": "starter"},
+            "protocol": {
+                "version": "dpa4c-ppu-contest.public-benchmark.v2",
+                "warmup": 20, "measured": 100, "pairs": 2,
+                "order": ["AB", "BA"],
+                "aggregation_method": "paired_geometric_mean_speedup",
+            },
+            "result": {"path": str(result), "sha256": flow.sha256(result)},
+            "output_artifacts": {
+                "result.json": flow.sha256(result),
+                "repeats.json": flow.sha256(repeats),
+            },
+        }
+        (benchmark_root / "measurement-binding.json").write_text(json.dumps(binding))
+        (benchmark_root / "BENCHMARK_STATUS.json").write_text('{"status":"PASS"}\n')
+        return run_root, benchmark_root, binding
+
+    def test_package_artifact_binding_rejects_drift_before_submission_creation(self):
+        variants = ("result", "repeats", "missing", "binding", "escape")
+        for variant in variants:
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                run_root, benchmark_root, binding = self._package_fixture(root)
+                if variant == "result":
+                    (benchmark_root / "result.json").write_text('{"status":"DRIFT"}\n')
+                    message = "result.json SHA mismatch"
+                elif variant == "repeats":
+                    (benchmark_root / "repeats.json").write_text('{"status":"DRIFT"}\n')
+                    message = "artifact SHA mismatch: repeats.json"
+                elif variant == "missing":
+                    (benchmark_root / "repeats.json").unlink()
+                    message = "artifact is missing: repeats.json"
+                elif variant == "binding":
+                    (benchmark_root / "measurement-binding.json").unlink()
+                    message = "No such file or directory"
+                else:
+                    binding["output_artifacts"]["../outside"] = "0" * 64
+                    (benchmark_root / "measurement-binding.json").write_text(json.dumps(binding))
+                    message = "escapes benchmark root"
+                args = Namespace(profile="full", run_root=run_root,
+                                 assets_root=root / "assets", starter_ref="base")
+                with (
+                    mock.patch.object(flow, "resolve_inputs", return_value=({}, run_root, root / "model", root / "structure")),
+                    mock.patch.object(flow, "source_identity", return_value={"commit": "candidate", "tree": "tree"}),
+                    mock.patch.object(flow, "git", side_effect=lambda command: "starter" if command[:2] == ["rev-parse", "base^{commit}"] else ""),
+                ):
+                    if variant == "binding":
+                        with self.assertRaises(FileNotFoundError):
+                            flow.package(args)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, message):
+                            flow.package(args)
+                self.assertFalse((run_root / "submission").exists())
 
     def test_measured_tree_drift_is_rejected(self):
         status = {"status": "PASS"}
@@ -546,14 +718,14 @@ class PublicBenchmarkTest(unittest.TestCase):
         self.assertIn("missing model:", result.stderr)
         self.assertNotIn("can't open file", result.stderr)
 
-    def test_rc4_is_the_only_default_starter(self):
-        self.assertEqual(flow.DEFAULT_STARTER_REF, "dpa4c-ppu-nano-starter-v1.0.0-rc4")
+    def test_rc5_is_the_only_default_starter(self):
+        self.assertEqual(flow.DEFAULT_STARTER_REF, "dpa4c-ppu-nano-starter-v1.0.0-rc5")
         readme = (Path(__file__).parents[1] / "README.md").read_text()
-        self.assertIn("dpa4c-ppu-nano-starter-v1.0.0-rc4", readme)
+        self.assertIn("dpa4c-ppu-nano-starter-v1.0.0-rc5", readme)
 
-    def test_runtime_image_binds_rc4_tag_and_external_provenance(self):
+    def test_runtime_image_binds_rc5_tag_and_external_provenance(self):
         dockerfile = (Path(__file__).parents[1] / "image/Dockerfile").read_text()
-        self.assertIn("--branch dpa4c-ppu-nano-starter-v1.0.0-rc4", dockerfile)
+        self.assertIn("--branch dpa4c-ppu-nano-starter-v1.0.0-rc5", dockerfile)
         self.assertIn("describe --exact-match --tags", dockerfile)
         self.assertIn("symbolic-ref -q HEAD", dockerfile)
         self.assertIn("DPA4C_RESOLVED_HEAD", dockerfile)

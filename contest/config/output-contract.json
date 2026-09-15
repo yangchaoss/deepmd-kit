@@ -1,0 +1,24 @@
+{
+  "schema_version": "dpa4c-ppu-contest.output-contract.v1",
+  "scope": "fixed Nano/1024 FP32 public measured outputs",
+  "measured_dimension": "N",
+  "atom_count": 1024,
+  "fields": {
+    "measured_energy_eV": {
+      "shape": ["N"],
+      "allowed_dtypes": ["float64"]
+    },
+    "measured_forces": {
+      "shape": ["N", 1024, 3],
+      "allowed_dtypes": ["float64"]
+    },
+    "measured_virial": {
+      "shape": ["N", 3, 3],
+      "allowed_dtypes": ["float64"]
+    },
+    "measured_stress": {
+      "shape": ["N", 6],
+      "allowed_dtypes": ["float64"]
+    }
+  }
+}
