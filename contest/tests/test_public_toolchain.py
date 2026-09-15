@@ -428,6 +428,21 @@ class PublicBenchmarkTest(unittest.TestCase):
             flow.execute_command(args)
         self.assertEqual(calls, ["build", "test", "benchmark", "package"])
 
+    def test_rc4_is_the_only_default_starter(self):
+        self.assertEqual(flow.DEFAULT_STARTER_REF, "dpa4c-ppu-nano-starter-v1.0.0-rc4")
+        readme = (Path(__file__).parents[1] / "README.md").read_text()
+        self.assertIn("dpa4c-ppu-nano-starter-v1.0.0-rc4", readme)
+
+    def test_runtime_image_binds_rc4_tag_and_external_provenance(self):
+        dockerfile = (Path(__file__).parents[1] / "image/Dockerfile").read_text()
+        self.assertIn("--branch dpa4c-ppu-nano-starter-v1.0.0-rc4", dockerfile)
+        self.assertIn("describe --exact-match --tags", dockerfile)
+        self.assertIn("symbolic-ref -q HEAD", dockerfile)
+        self.assertIn("DPA4C_RESOLVED_HEAD", dockerfile)
+        self.assertIn("DPA4C_RESOLVED_TREE", dockerfile)
+        self.assertNotIn("com.dptech.dpa4c.source-commit", dockerfile)
+        self.assertNotIn("com.dptech.dpa4c.source-tree", dockerfile)
+
     def test_legacy_entry_is_thin_forwarder(self):
         legacy = Path(__file__).parents[2] / "examples/ppu/dpa4c_nano_rc1/scripts/contestant.sh"
         text = legacy.read_text()

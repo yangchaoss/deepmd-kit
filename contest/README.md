@@ -3,16 +3,17 @@
 This file is the only authoritative contestant-facing contract for the Nano
 PPU flow. The starter repository is
 `https://github.com/yangchaoss/deepmd-kit.git`; the immutable starter ref is
-`dpa4c-ppu-nano-starter-v1.0.0-rc3`. Resolve that tag to record the exact
+`dpa4c-ppu-nano-starter-v1.0.0-rc4`. Resolve that tag to record the exact
 commit and tree used by a run. Historical files under
 `examples/ppu/dpa4c_nano_rc1/` are compatibility material only and do not
 define a second submission contract.
 
-The published `dpa4c-ppu-nano-starter-v1.0.0-rc1` and
-`dpa4c-ppu-nano-starter-v1.0.0-rc2` tags are superseded historical material
+The published `dpa4c-ppu-nano-starter-v1.0.0-rc1`,
+`dpa4c-ppu-nano-starter-v1.0.0-rc2`, and
+`dpa4c-ppu-nano-starter-v1.0.0-rc3` tags are superseded historical material
 and must not be used as the current starter. rc2 was superseded after final
 Runtime Image prevalidation exposed candidate dependency inheritance and
-failed the isolation gate; rc1 and rc2 remain history only.
+failed the isolation gate; rc1, rc2, and rc3 remain history only.
 
 The organizer calls one tracked entrypoint.  Assets remain external and are
 accepted only at the frozen SHA-256 values in `config/runtime.json`.
@@ -20,8 +21,8 @@ accepted only at the frozen SHA-256 values in `config/runtime.json`.
 ```bash
 ./contest/contest.sh build --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets
 ./contest/contest.sh test  --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets
-./contest/contest.sh benchmark --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc3
-./contest/contest.sh package --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc3
+./contest/contest.sh benchmark --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc4
+./contest/contest.sh package --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc4
 ```
 
 `build` creates a candidate virtual environment outside the checkout, builds a
