@@ -18,10 +18,31 @@ from pathlib import Path
 import numpy as np
 
 
-PROTOCOL = "dpa4c-ppu-contest.public-benchmark.v1"
+PROTOCOL = "dpa4c-ppu-contest.public-benchmark.v2"
 PUBLIC_SEEDS = (510421, 620531, 730637)
-PAIR_ORDERS = (("baseline", "candidate"), ("candidate", "baseline"),
-               ("baseline", "candidate"))
+PAIR_ORDERS = (("baseline", "candidate"), ("candidate", "baseline"))
+
+
+def aggregation_method(profile: str) -> str:
+    if profile == "quick":
+        return "paired_speedup"
+    if profile == "full":
+        return "paired_geometric_mean_speedup"
+    raise ValueError(f"unsupported profile: {profile}")
+
+
+def aggregate_speedups(speedups: list[float], method: str) -> float | None:
+    if not speedups:
+        return None
+    if method == "paired_speedup":
+        if len(speedups) != 1:
+            raise ValueError("paired_speedup requires exactly one pair")
+        return float(speedups[0])
+    if method == "paired_geometric_mean_speedup":
+        if len(speedups) != 2 or any(value <= 0.0 for value in speedups):
+            raise ValueError("paired_geometric_mean_speedup requires two positive pairs")
+        return float(np.sqrt(speedups[0] * speedups[1]))
+    raise ValueError(f"unsupported aggregation method: {method}")
 
 
 class RouteFailure(RuntimeError):
@@ -140,7 +161,7 @@ def _compact_correctness_summary(pairs: list[dict[str, object]]) -> dict[str, ob
 
 
 def compact_public_result(
-    aggregate: dict[str, object], *, warmup: int = 20, measured: int = 500
+    aggregate: dict[str, object], *, warmup: int = 20, measured: int = 100
 ) -> dict[str, object]:
     """Return the compact public result while leaving full evidence in repeats.json."""
     pairs = aggregate.get("pairs")
@@ -181,6 +202,8 @@ def compact_public_result(
     def median(route: str, key: str) -> float:
         return float(statistics.median(float(item[key]) for item in latencies[route]))
 
+    method = str(aggregate.get("aggregation_method", aggregation_method(str(aggregate.get("profile", "full")))))
+    aggregate_speedup = aggregate_speedups(pair_speedups, method)
     performance = {
         "fresh_pair_count": len(pairs),
         "fresh_process_count": len(pairs) * 2,
@@ -200,10 +223,12 @@ def compact_public_result(
             "p99_median": median("candidate", "p99_s"),
         },
         "pair_speedups_candidate_over_baseline": pair_speedups,
-        "paired_median_speedup": (
-            float(statistics.median(pair_speedups)) if pair_speedups else None
-        ),
+        "aggregation_method": method,
     }
+    if method == "paired_geometric_mean_speedup":
+        performance["paired_geometric_mean_speedup"] = aggregate_speedup
+    else:
+        performance["paired_speedup"] = aggregate_speedup
     status = str(aggregate.get("status", "BENCHMARK_INVALID"))
     if status == "PASS" and correctness["status"] != "PASS":
         status = str(correctness["status"])
@@ -220,12 +245,13 @@ def compact_public_result(
             "pair_count": len(pairs),
             "warmup": warmup,
             "measured": measured,
+            "aggregation_method": method,
         },
+        "aggregation_method": method,
         "benchmark_tolerance": aggregate.get("benchmark_tolerance"),
         "pair_speedups_candidate_over_baseline": pair_speedups,
-        "paired_median_speedup": (
-            performance["paired_median_speedup"] if status == "PASS" else None
-        ),
+        ("paired_geometric_mean_speedup" if method == "paired_geometric_mean_speedup"
+         else "paired_speedup"): aggregate_speedup if status == "PASS" else None,
         "pairs": compact_pairs,
         "correctness_summary": correctness,
         "performance_summary": performance,
@@ -271,16 +297,16 @@ def load_atoms(structure: Path):
 
 
 def generate_sequences(
-    structure: Path, *, warmup: int = 20, measured: int = 500, pair_count: int = 3
+    structure: Path, *, warmup: int = 20, measured: int = 100, pair_count: int = 2
 ):
+    if pair_count not in (1, 2):
+        raise RuntimeError("pair_count must be 1 (quick) or 2 (full); legacy 3-pair protocol is unsupported")
     atoms = load_atoms(structure)
 
     if len(atoms) != 1024 or not bool(np.all(atoms.pbc)):
         raise RuntimeError("public benchmark requires the fixed periodic 1024-atom structure")
     base = np.asarray(atoms.positions, dtype=np.float64)
     cell = np.asarray(atoms.cell.array, dtype=np.float64)
-    if pair_count < 1 or pair_count > len(PUBLIC_SEEDS):
-        raise RuntimeError(f"pair_count must be between 1 and {len(PUBLIC_SEEDS)}")
     pairs = []
     all_hashes: set[str] = set()
     for number, seed in enumerate(PUBLIC_SEEDS[:pair_count], start=1):
@@ -414,6 +440,7 @@ def run_benchmark(args) -> dict[str, object]:
     root.mkdir(parents=True, exist_ok=False)
     status_path = root / "BENCHMARK_STATUS.json"
     score_type = "development_quick" if args.profile == "quick" else "public_self_test"
+    method = aggregation_method(args.profile)
     pair_orders = PAIR_ORDERS[:args.pair_count]
     status = {"schema_version": PROTOCOL, "status": "RUNNING",
               "profile": args.profile, "score_type": score_type, "verified": False,
@@ -421,6 +448,7 @@ def run_benchmark(args) -> dict[str, object]:
                               for order in pair_orders],
               "pair_count": args.pair_count,
               "warmup": args.warmup, "measured": args.measured,
+              "aggregation_method": method,
               "formal_performance": "NOT_RUN_BY_SCOPE"}
     write_json(status_path, status)
     tolerance = load_tolerance(args.benchmark_tolerance)
@@ -511,15 +539,34 @@ def run_benchmark(args) -> dict[str, object]:
     final_status = overall if overall != "PASS" else (
         "PASS" if len(pair_records) == args.pair_count else "BENCHMARK_INVALID"
     )
-    aggregate = {"schema_version": "dpa4c-ppu-contest.public-aggregate.v1",
+    aggregate_speedup = aggregate_speedups(speedups, method) if final_status == "PASS" else None
+    aggregate = {"schema_version": "dpa4c-ppu-contest.public-aggregate.v2",
                  "status": final_status, "profile": args.profile,
                  "score_type": score_type, "verified": False,
-                 "paired_median_speedup": (
-                     float(statistics.median(speedups)) if final_status == "PASS" else None
-                 ), "benchmark_tolerance": tolerance_identity,
+                 "pair_order": ["AB" if order == ("baseline", "candidate") else "BA"
+                                for order in pair_orders],
+                 "pair_count": args.pair_count,
+                 "warmup": args.warmup,
+                 "measured": args.measured,
+                 "aggregation_method": method,
+                 "benchmark_tolerance": tolerance_identity,
                  "pair_speedups_candidate_over_baseline": speedups, "pairs": pair_records}
+    aggregate["paired_geometric_mean_speedup" if method == "paired_geometric_mean_speedup"
+              else "paired_speedup"] = aggregate_speedup
     write_json(root / "formal-aggregate.json", aggregate)
-    write_json(root / "repeats.json", {"schema_version": PROTOCOL, "routes": records})
+    write_json(root / "repeats.json", {
+        "schema_version": PROTOCOL,
+        "profile": args.profile,
+        "score_type": score_type,
+        "verified": False,
+        "pair_order": ["AB" if order == ("baseline", "candidate") else "BA"
+                        for order in pair_orders],
+        "pair_count": args.pair_count,
+        "warmup": args.warmup,
+        "measured": args.measured,
+        "aggregation_method": method,
+        "routes": records,
+    })
     write_json(root / "result.json", compact_public_result(
         aggregate, warmup=args.warmup, measured=args.measured
     ))
@@ -535,7 +582,9 @@ def run_benchmark(args) -> dict[str, object]:
         for pair in pair_records:
             baseline, candidate = pair["routes"]["baseline"], pair["routes"]["candidate"]
             writer.writerow([pair["pair_id"], pair["order"], baseline["latency"]["throughput_evals_per_s"], candidate["latency"]["throughput_evals_per_s"], pair["speedup_candidate_over_baseline"], baseline["correctness"]["status"], candidate["correctness"]["status"]])
-    status.update({"status": final_status, "paired_median_speedup": aggregate["paired_median_speedup"]})
+    status.update({"status": final_status,
+                   ("paired_geometric_mean_speedup" if method == "paired_geometric_mean_speedup"
+                    else "paired_speedup"): aggregate_speedup})
     write_json(status_path, status)
     return aggregate
 
@@ -550,8 +599,8 @@ def main() -> int:
     parser.add_argument("--structure", type=Path, required=True)
     parser.add_argument("--benchmark-tolerance", type=Path, required=True)
     parser.add_argument("--warmup", type=int, default=20)
-    parser.add_argument("--measured", type=int, default=500)
-    parser.add_argument("--pair-count", type=int, default=3)
+    parser.add_argument("--measured", type=int, default=100)
+    parser.add_argument("--pair-count", type=int, default=2)
     parser.add_argument("--profile", choices=("quick", "full"), default="full")
     args = parser.parse_args()
     try:
@@ -565,6 +614,9 @@ def main() -> int:
                    {"schema_version": PROTOCOL, "status": status,
                     "profile": args.profile, "score_type": score_type,
                     "verified": False, "pair_count": args.pair_count,
+                    "pair_order": ["AB", "BA"][:args.pair_count],
+                    "warmup": args.warmup, "measured": args.measured,
+                    "aggregation_method": aggregation_method(args.profile),
                     "error_type": type(exc).__name__, "error": str(exc),
                     "formal_performance": "NOT_RUN_BY_SCOPE"})
         print(json.dumps({"status": status, "error": str(exc)}), file=sys.stderr)

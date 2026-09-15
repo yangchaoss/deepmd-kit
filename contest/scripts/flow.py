@@ -38,19 +38,23 @@ SUBMISSION_FILES = frozenset({
 PROFILE_CONFIG = {
     "quick": {
         "pair_count": 1,
+        "pair_order": ["AB"],
         "warmup": 2,
         "measured": 10,
         "score_type": "development_quick",
         "verified": False,
         "package": False,
+        "aggregation_method": "paired_speedup",
     },
     "full": {
-        "pair_count": 3,
+        "pair_count": 2,
+        "pair_order": ["AB", "BA"],
         "warmup": 20,
-        "measured": 500,
+        "measured": 100,
         "score_type": "public_self_test",
         "verified": False,
         "package": True,
+        "aggregation_method": "paired_geometric_mean_speedup",
     },
 }
 
@@ -708,7 +712,7 @@ def benchmark(args) -> None:
         }
     starter_commit = git(["rev-parse", f"{args.starter_ref}^{{commit}}"])
     binding = {
-        "schema_version": "dpa4c-ppu-contest.measurement-binding.v1",
+        "schema_version": "dpa4c-ppu-contest.measurement-binding.v2",
         "status": "PASS", "profile": args.profile,
         "score_type": profile["score_type"], "verified": profile["verified"],
         "starter": {"ref": args.starter_ref, "resolved_commit": starter_commit},
@@ -734,14 +738,15 @@ def benchmark(args) -> None:
         },
         "assets": build_status["assets"],
         "benchmark_tolerance": benchmark_tolerance_identity(),
-        "protocol": {"version": "dpa4c-ppu-contest.public-benchmark.v1",
+        "protocol": {"version": "dpa4c-ppu-contest.public-benchmark.v2",
                      "warmup": profile["warmup"], "measured": profile["measured"],
                      "pairs": profile["pair_count"],
-                     "order": ["AB", "BA", "AB"][:profile["pair_count"]]},
+                     "order": profile["pair_order"],
+                     "aggregation_method": profile["aggregation_method"]},
         "pair_manifests": pair_manifests,
         "result": {"path": str(benchmark_root / "result.json"),
                    "sha256": sha256(benchmark_root / "result.json"),
-                   "paired_median_speedup": aggregate["paired_median_speedup"]},
+                   profile["aggregation_method"]: aggregate.get(profile["aggregation_method"])},
         "formal_performance": "NOT_RUN_BY_SCOPE",
     }
     binding["output_artifacts"] = {
@@ -847,6 +852,8 @@ def package(args) -> None:
         "starter": {"ref": args.starter_ref, "resolved_commit": starter},
         "candidate": current, "patch": patch_info,
         "score_type": "public_self_test", "verified": False,
+        "protocol": binding["protocol"],
+        "aggregation_method": binding["protocol"]["aggregation_method"],
         "files": {}, "formal_performance": "NOT_RUN_BY_SCOPE",
     }
     for path in sorted(output.iterdir()):
@@ -882,13 +889,14 @@ def validate_package_gate(
     if binding.get("starter") != {"ref": starter_ref, "resolved_commit": starter_commit}:
         raise RuntimeError("starter ref differs from measured binding")
     if binding.get("profile") != "full" or binding.get("protocol") != {
-        "version": "dpa4c-ppu-contest.public-benchmark.v1",
+        "version": "dpa4c-ppu-contest.public-benchmark.v2",
         "warmup": 20,
-        "measured": 500,
-        "pairs": 3,
-        "order": ["AB", "BA", "AB"],
+        "measured": 100,
+        "pairs": 2,
+        "order": ["AB", "BA"],
+        "aggregation_method": "paired_geometric_mean_speedup",
     }:
-        raise RuntimeError("package requires the full 3-pair 20+500 binding")
+        raise RuntimeError("package requires the full 2-pair AB/BA 20+100 binding")
     if binding.get("verified") is not False:
         raise RuntimeError("public self-test binding must remain verified=false")
 

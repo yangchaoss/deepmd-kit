@@ -50,8 +50,8 @@ The default profile is `quick`: one public baseline/candidate pair with 2
 warmup and 10 measured frames. Its result is marked
 `score_type=development_quick`, `verified=false`, and
 `formal_performance=NOT_RUN`; it never creates a submission. `full` retains
-the public self-test protocol of three fresh pairs in AB/BA/AB order with 20
-warmup and 500 measured frames. Both profiles use the same worker, timer,
+the public self-test protocol of two fresh pairs in AB/BA order with 20
+warmup and 100 measured frames. Both profiles use the same worker, timer,
 synchronization, input generation, and E/F/virial/stress checks.
 
 `build` creates a candidate virtual environment outside the checkout, builds a
@@ -84,15 +84,18 @@ python -m pip download --only-binary=:all: --no-deps --require-hashes \
   -r contest/config/runtime-requirements.txt
 ```
 
-`benchmark` is a public, unverified self-test. It runs three fresh-process
-baseline/candidate pairs in AB/BA/AB order, with 20 warmup and 500 measured
-frames per route. Each route uses a separate process; reference evaluation is
-also separate. Host inputs are materialized before timing, while evaluate,
-device synchronization, and host-ready E/F/virial/stress outputs are inside the
-timer. Correctness is checked only after all 500 measured outputs are buffered.
-The reported score is the median of the three paired baseline/candidate
-speedups; a value below 1 remains a valid PASS when protocol and correctness
-pass. This is not an organizer-verified score and contains no private seeds,
+`benchmark` is a public, unverified self-test. The `full` profile runs two
+fresh-process baseline/candidate pairs in AB/BA order, with 20 warmup and 100
+measured frames per route. The two pairs use disjoint public input sequences;
+within each pair, baseline/candidate/reference share the same inputs. Each
+route uses a separate process; reference evaluation is also separate. Host
+inputs are materialized before timing, while evaluate, device synchronization,
+and host-ready E/F/virial/stress outputs are inside the timer. Correctness is
+checked after all measured outputs are buffered. The two paired speedups are
+retained, and full's headline is the geometric mean
+`sqrt(S_AB*S_BA)` (`paired_geometric_mean_speedup`), never the best pair. Every
+route also records mean, p50, p90, p99, CV, and throughput; p99 is diagnostic
+only. This is not an organizer-verified score and contains no private seeds,
 runner, or validator.
 
 The `all` command expands in exactly this order: `build` → `test` →
@@ -104,11 +107,17 @@ runs a private formal benchmark. Historical commits may be selected only with
 an explicit immutable `--starter-ref`; the default is the frozen starter tag
 declared above.
 
-The public aggregate `result.json` is a compact summary: it contains pair
-latency/throughput aggregates, correctness maxima and tolerances, and median
-performance statistics. The complete per-frame correctness and route evidence
-remains in `repeats.json`; packaging binds the compact result SHA rather than
-duplicating those arrays.
+The public aggregate `result.json` is a compact summary: it contains the
+explicit protocol (`pair_count`, `pair_order`, `warmup`, `measured`, and
+`aggregation_method`), pair latency/throughput aggregates, correctness maxima
+and tolerances, and the two pair speedups plus the selected headline. The
+complete per-frame correctness and route evidence remains in `repeats.json`,
+which repeats the same protocol metadata; packaging binds the compact result
+SHA rather than duplicating those arrays. The fixed submission manifest also
+records the protocol and aggregation method. A full run with no committed
+candidate change may complete measurement but is explicitly
+`PACKAGE_SKIPPED`; only a changed, passing full run creates the eight-file
+submission.
 
 The runtime image recipe is a separate, later release step. It must clone this
 public repository at the immutable starter tag during image construction; the

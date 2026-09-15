@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 
-PROTOCOL = "dpa4c-ppu-contest.public-benchmark.v1"
+PROTOCOL = "dpa4c-ppu-contest.public-benchmark.v2"
 STREAM = None
 
 

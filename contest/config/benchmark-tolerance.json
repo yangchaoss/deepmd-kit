@@ -1,7 +1,7 @@
 {
   "schema_version": "dpa4c-ppu-contest.benchmark-tolerance.v1",
   "tolerance_id": "nano-1024-fp32-public-dynamic-baseline-v1",
-  "scope": "Public self-test only: fixed Nano model, periodic 1024-atom structure, FP32, 20 warmup plus 500 measured dynamic frames",
+  "scope": "Public self-test only: fixed Nano model, periodic 1024-atom structure, FP32, 20 warmup plus 100 measured dynamic frames per route",
   "interpretation": "Baseline dynamic repeatability envelope; not a scientific accuracy tolerance and not transferable to other models, sizes, precisions, or protocols",
   "derivation": "max(anchor_atol, 1.25 * max_abs_baseline_dynamic) over the frozen baseline-only 500-measured-frame study",
   "source": {

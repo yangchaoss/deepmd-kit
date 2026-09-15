@@ -49,7 +49,7 @@ def synthetic_aggregate() -> dict[str, object]:
         "measured_stress": ([4, 6], "float64", 0.004),
     }
     pairs = []
-    for number, order in enumerate(("AB", "BA", "AB"), start=1):
+    for number, order in enumerate(("AB", "BA"), start=1):
         routes = {}
         for route in ("baseline", "candidate"):
             checks = {
@@ -78,11 +78,11 @@ def synthetic_aggregate() -> dict[str, object]:
             "speedup_candidate_over_baseline": 1.0 + number * 0.01,
         })
     return {
-        "schema_version": "dpa4c-ppu-contest.public-aggregate.v1",
+        "schema_version": "dpa4c-ppu-contest.public-aggregate.v2",
         "status": "PASS", "score_type": "public_self_test", "verified": False,
-        "paired_median_speedup": 1.02,
+        "profile": "full", "aggregation_method": "paired_geometric_mean_speedup",
         "benchmark_tolerance": {"fields": {"energy_eV": {"atol": 0.01, "rtol": 0.0}}},
-        "pair_speedups_candidate_over_baseline": [1.01, 1.02, 1.03], "pairs": pairs,
+        "pair_speedups_candidate_over_baseline": [1.01, 1.02], "pairs": pairs,
     }
 
 
@@ -93,21 +93,25 @@ class PublicBenchmarkTest(unittest.TestCase):
         self.assertEqual(compact["status"], "PASS")
         self.assertEqual(compact["result_format"], "compact")
         self.assertEqual(compact["protocol"], {
-            "pair_order": ["AB", "BA", "AB"], "pair_count": 3,
+            "pair_order": ["AB", "BA"], "pair_count": 2,
             "warmup": 2, "measured": 4,
+            "aggregation_method": "paired_geometric_mean_speedup",
         })
         correctness = compact["correctness_summary"]
         self.assertEqual(correctness["status"], "PASS")
         self.assertEqual(correctness["routes"]["candidate"]["measured_frames"], 4)
         self.assertEqual(correctness["routes"]["candidate"]["shape"]["forces_eV_per_A"], [4, 1024, 3])
-        self.assertEqual(correctness["routes"]["candidate"]["max_abs"]["energy_eV"], 0.005)
+        self.assertEqual(correctness["routes"]["candidate"]["max_abs"]["energy_eV"], 0.004)
         self.assertEqual(correctness["tolerance"]["energy_eV"], {"atol": 0.01, "rtol": 0.0})
         performance = compact["performance_summary"]
-        self.assertEqual(performance["fresh_pair_count"], 3)
-        self.assertEqual(performance["fresh_process_count"], 6)
-        self.assertEqual(performance["candidate"]["median_evals_per_s"], 8.2)
-        self.assertEqual(performance["candidate_latency_s"]["p50_median"], 1.11)
-        self.assertEqual(performance["paired_median_speedup"], 1.02)
+        self.assertEqual(performance["fresh_pair_count"], 2)
+        self.assertEqual(performance["fresh_process_count"], 4)
+        self.assertEqual(performance["candidate"]["median_evals_per_s"], 8.7)
+        self.assertEqual(performance["candidate_latency_s"]["p50_median"], 1.06)
+        self.assertEqual(performance["aggregation_method"], "paired_geometric_mean_speedup")
+        self.assertAlmostEqual(performance["paired_geometric_mean_speedup"], (1.01 * 1.02) ** 0.5)
+        self.assertAlmostEqual(compact["paired_geometric_mean_speedup"], (1.01 * 1.02) ** 0.5)
+        self.assertNotIn("paired_median_speedup", json.dumps(compact))
         encoded = json.dumps(compact)
         self.assertNotIn("per_frame_max_abs", encoded)
         self.assertNotIn("warmup_latencies_s", encoded)
@@ -123,6 +127,12 @@ class PublicBenchmarkTest(unittest.TestCase):
         self.assertEqual(compact["status"], "CANDIDATE_INVALID")
         self.assertEqual(compact["correctness_summary"]["status"], "CANDIDATE_INVALID")
         self.assertEqual(compact["pairs"][1]["candidate"]["correctness"], "CANDIDATE_INVALID")
+
+    def test_full_aggregation_is_geometric_and_quick_is_single_pair(self):
+        self.assertEqual(benchmark.aggregate_speedups([1.0], "paired_speedup"), 1.0)
+        self.assertEqual(benchmark.aggregate_speedups([1.0, 4.0], "paired_geometric_mean_speedup"), 2.0)
+        with self.assertRaisesRegex(ValueError, "requires two"):
+            benchmark.aggregate_speedups([1.0, 2.0, 3.0], "paired_geometric_mean_speedup")
 
     def test_fixed_submission_contract_and_sha_lines(self):
         expected = {
@@ -284,17 +294,19 @@ class PublicBenchmarkTest(unittest.TestCase):
         ).splitlines()
         self.assertFalse([name for name in tracked if Path(name).suffix == ".whl"])
 
-    def test_three_disjoint_public_pairs_and_order(self):
+    def test_two_disjoint_public_pairs_and_order(self):
         with mock.patch.object(benchmark, "load_atoms", return_value=FakeAtoms()):
             pairs = benchmark.generate_sequences(Path("unused"), warmup=2, measured=3)
         self.assertEqual(["".join("A" if r == "baseline" else "B" for r in order)
-                          for order in benchmark.PAIR_ORDERS], ["AB", "BA", "AB"])
-        self.assertEqual(len(pairs), 3)
+                          for order in benchmark.PAIR_ORDERS], ["AB", "BA"])
+        self.assertEqual(len(pairs), 2)
         hashes = [digest for pair in pairs for digest in pair["frame_hashes"]]
         self.assertEqual(len(hashes), len(set(hashes)))
         self.assertTrue(all(not set(pair["frame_hashes"][:2]) &
                             set(pair["frame_hashes"][2:]) for pair in pairs))
         self.assertEqual(benchmark.PUBLIC_SEEDS, (510421, 620531, 730637))
+        with self.assertRaisesRegex(RuntimeError, "legacy 3-pair"):
+            benchmark.generate_sequences(Path("unused"), warmup=2, measured=3, pair_count=3)
 
     def test_quick_sequence_is_one_pair_with_short_protocol(self):
         with mock.patch.object(benchmark, "load_atoms", return_value=FakeAtoms()):
@@ -394,6 +406,24 @@ class PublicBenchmarkTest(unittest.TestCase):
             flow.validate_package_gate(status, binding, {"commit": "c", "tree": "new"},
                                        "base", "b")
 
+    def test_package_rejects_legacy_three_pair_binding(self):
+        binding = {
+            "status": "PASS",
+            "source": {"commit": "c", "tree": "t"},
+            "starter": {"ref": "base", "resolved_commit": "b"},
+            "profile": "full",
+            "verified": False,
+            "protocol": {
+                "version": "dpa4c-ppu-contest.public-benchmark.v1",
+                "warmup": 20, "measured": 500, "pairs": 3,
+                "order": ["AB", "BA", "AB"],
+            },
+        }
+        with self.assertRaisesRegex(RuntimeError, "2-pair"):
+            flow.validate_package_gate(
+                {"status": "PASS"}, binding, {"commit": "c", "tree": "t"}, "base", "b"
+            )
+
     def test_dirty_tree_is_rejected(self):
         with mock.patch.object(flow, "git", return_value=" M contest/file"):
             with self.assertRaisesRegex(RuntimeError, "not clean"):
@@ -441,16 +471,16 @@ class PublicBenchmarkTest(unittest.TestCase):
             flow.execute_command(args)
         self.assertEqual(calls, ["build", "test", "benchmark", "package"])
 
-    def test_profiles_are_fixed_and_full_keeps_rc4_protocol(self):
+    def test_profiles_are_fixed_and_full_uses_two_pair_protocol(self):
         self.assertEqual(flow.profile_config("quick"), {
-            "pair_count": 1, "warmup": 2, "measured": 10,
+            "pair_count": 1, "pair_order": ["AB"], "warmup": 2, "measured": 10,
             "score_type": "development_quick", "verified": False,
-            "package": False,
+            "package": False, "aggregation_method": "paired_speedup",
         })
         self.assertEqual(flow.profile_config("full"), {
-            "pair_count": 3, "warmup": 20, "measured": 500,
+            "pair_count": 2, "pair_order": ["AB", "BA"], "warmup": 20, "measured": 100,
             "score_type": "public_self_test", "verified": False,
-            "package": True,
+            "package": True, "aggregation_method": "paired_geometric_mean_speedup",
         })
 
     def test_all_quick_skips_package_and_writes_status(self):
