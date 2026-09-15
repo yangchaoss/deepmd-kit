@@ -787,14 +787,22 @@ class PublicBenchmarkTest(unittest.TestCase):
         self.assertIn("missing model:", result.stderr)
         self.assertNotIn("can't open file", result.stderr)
 
-    def test_rc5_is_the_only_default_starter(self):
-        self.assertEqual(flow.DEFAULT_STARTER_REF, "dpa4c-ppu-nano-starter-v1.0.0-rc5")
+    def test_rc6_is_the_only_default_starter(self):
+        self.assertEqual(flow.DEFAULT_STARTER_REF, "dpa4c-ppu-nano-starter-v1.0.0-rc6")
         readme = (Path(__file__).parents[1] / "README.md").read_text()
-        self.assertIn("dpa4c-ppu-nano-starter-v1.0.0-rc5", readme)
+        self.assertIn("dpa4c-ppu-nano-starter-v1.0.0-rc6", readme)
 
-    def test_runtime_image_binds_rc5_tag_and_external_provenance(self):
+    def test_runtime_image_binds_rc6_tag_and_external_provenance(self):
         dockerfile = (Path(__file__).parents[1] / "image/Dockerfile").read_text()
-        self.assertIn("--branch dpa4c-ppu-nano-starter-v1.0.0-rc5", dockerfile)
+        runtime = json.loads((Path(__file__).parents[1] / "config/runtime.json").read_text())
+        self.assertIn("--branch dpa4c-ppu-nano-starter-v1.0.0-rc6", dockerfile)
+        self.assertEqual(runtime["baseline_python"], "/opt/dpa4c-baseline-venv/bin/python")
+        self.assertIn("DPA4C_BASELINE_VENV=/opt/dpa4c-baseline-venv", dockerfile)
+        self.assertIn("DPA4C_BASELINE_BUILD=/opt/dpa4c-baseline-build", dockerfile)
+        self.assertIn("python -m venv --system-site-packages", dockerfile)
+        self.assertIn('baseline_python="$DPA4C_BASELINE_VENV/bin/python"', dockerfile)
+        self.assertIn('pip wheel "$DPA4C_CONTESTANT_ROOT"', dockerfile)
+        self.assertIn('"baseline_wheel"', dockerfile)
         self.assertIn("describe --exact-match --tags", dockerfile)
         self.assertIn("symbolic-ref -q HEAD", dockerfile)
         self.assertIn("DPA4C_RESOLVED_HEAD", dockerfile)

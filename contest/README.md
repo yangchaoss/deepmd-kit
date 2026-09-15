@@ -3,7 +3,7 @@
 This file is the only authoritative contestant-facing contract for the Nano
 PPU flow. The starter repository is
 `https://github.com/yangchaoss/deepmd-kit.git`; the immutable starter ref is
-`dpa4c-ppu-nano-starter-v1.0.0-rc5`. Resolve that tag to record the exact
+`dpa4c-ppu-nano-starter-v1.0.0-rc6`. Resolve that tag to record the exact
 commit and tree used by a run. Historical files under
 `examples/ppu/dpa4c_nano_rc1/` are compatibility material only and do not
 define a second submission contract.
@@ -53,8 +53,8 @@ benchmark and candidate contract failures invalidate the candidate.
 ```bash
 ./contest/contest.sh build --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets
 ./contest/contest.sh test  --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets
-./contest/contest.sh benchmark --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc5
-./contest/contest.sh package --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc5
+./contest/contest.sh benchmark --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc6
+./contest/contest.sh package --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc6
 ```
 
 The default profile is `quick`: one public baseline/candidate pair with 2

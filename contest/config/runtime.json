@@ -1,6 +1,6 @@
 {
   "schema_version": "dpa4c-ppu-contest.runtime.v1",
-  "baseline_python": "/opt/ac2/bin/python",
+  "baseline_python": "/opt/dpa4c-baseline-venv/bin/python",
   "assets": {
     "model": {
       "name": "DPA4C-Nano-OMat24-v20260819.pt",
