@@ -31,6 +31,10 @@ DEFAULT_STARTER_REF = "dpa4c-ppu-nano-starter-v1.0.0-rc3"
 BENCHMARK_WORKER = CONTEST / "scripts" / "public_route_worker.py"
 BENCHMARK_RUNNER = CONTEST / "scripts" / "public_benchmark.py"
 BINARY_IMPLEMENTATION_SUFFIXES = {".so", ".o", ".a", ".whl"}
+SUBMISSION_FILES = frozenset({
+    "candidate.patch", "result.json", "repeats.json", "measurement-binding.json",
+    "submission-manifest.json", "image.json", "CHANGELOG.md", "SHA256SUMS",
+})
 
 
 def sha256(path: Path) -> str:
@@ -719,10 +723,7 @@ def package(args) -> None:
     (output / "SHA256SUMS").write_text(
         "".join(f"{sha256(path)}  {path.name}\n" for path in payloads)
     )
-    expected = {"candidate.patch", "result.json", "repeats.json",
-                "measurement-binding.json", "submission-manifest.json", "image.json",
-                "CHANGELOG.md", "SHA256SUMS"}
-    if {path.name for path in output.iterdir()} != expected:
+    if {path.name for path in output.iterdir()} != SUBMISSION_FILES:
         raise RuntimeError("submission output set differs from fixed contract")
 
 

@@ -41,7 +41,107 @@ class FakeAtoms:
         return 1024
 
 
+def synthetic_aggregate() -> dict[str, object]:
+    fields = {
+        "measured_energy_eV": ([4], "float64", 0.001),
+        "measured_forces": ([4, 1024, 3], "float64", 0.002),
+        "measured_virial": ([4, 3, 3], "float64", 0.003),
+        "measured_stress": ([4, 6], "float64", 0.004),
+    }
+    pairs = []
+    for number, order in enumerate(("AB", "BA", "AB"), start=1):
+        routes = {}
+        for route in ("baseline", "candidate"):
+            checks = {
+                name: {
+                    "shape": shape, "dtype": dtype, "finite": True,
+                    "max_abs": maximum + number * 0.001 + (0.001 if route == "candidate" else 0.0),
+                    "per_frame_max_abs": [maximum, maximum + 0.001],
+                    "atol": 0.01, "rtol": 0.0, "status": "PASS",
+                }
+                for name, (shape, dtype, maximum) in fields.items()
+            }
+            routes[route] = {
+                "correctness": {"status": "PASS", "checks": checks},
+                "latency": {
+                    "mean_s": 1.0 + number * 0.1 + (0.01 if route == "candidate" else 0.0),
+                    "p50_s": 0.9 + number * 0.1 + (0.01 if route == "candidate" else 0.0),
+                    "p90_s": 1.1 + number * 0.1 + (0.01 if route == "candidate" else 0.0),
+                    "p99_s": 1.2 + number * 0.1 + (0.01 if route == "candidate" else 0.0),
+                    "cv": 0.01 * number + (0.001 if route == "candidate" else 0.0),
+                    "throughput_evals_per_s": 10.0 - number + (0.2 if route == "candidate" else 0.0),
+                    "throughput_atoms_per_s": 100.0 - number + (2.0 if route == "candidate" else 0.0),
+                },
+            }
+        pairs.append({
+            "pair_id": f"Pair{number}", "order": order, "routes": routes,
+            "speedup_candidate_over_baseline": 1.0 + number * 0.01,
+        })
+    return {
+        "schema_version": "dpa4c-ppu-contest.public-aggregate.v1",
+        "status": "PASS", "score_type": "public_self_test", "verified": False,
+        "paired_median_speedup": 1.02,
+        "benchmark_tolerance": {"fields": {"energy_eV": {"atol": 0.01, "rtol": 0.0}}},
+        "pair_speedups_candidate_over_baseline": [1.01, 1.02, 1.03], "pairs": pairs,
+    }
+
+
 class PublicBenchmarkTest(unittest.TestCase):
+    def test_compact_summary_aggregates_records_and_keeps_repeats_separate(self):
+        aggregate = synthetic_aggregate()
+        compact = benchmark.compact_public_result(aggregate, warmup=2, measured=4)
+        self.assertEqual(compact["status"], "PASS")
+        self.assertEqual(compact["result_format"], "compact")
+        self.assertEqual(compact["protocol"], {
+            "pair_order": ["AB", "BA", "AB"], "pair_count": 3,
+            "warmup": 2, "measured": 4,
+        })
+        correctness = compact["correctness_summary"]
+        self.assertEqual(correctness["status"], "PASS")
+        self.assertEqual(correctness["routes"]["candidate"]["measured_frames"], 4)
+        self.assertEqual(correctness["routes"]["candidate"]["shape"]["forces_eV_per_A"], [4, 1024, 3])
+        self.assertEqual(correctness["routes"]["candidate"]["max_abs"]["energy_eV"], 0.005)
+        self.assertEqual(correctness["tolerance"]["energy_eV"], {"atol": 0.01, "rtol": 0.0})
+        performance = compact["performance_summary"]
+        self.assertEqual(performance["fresh_pair_count"], 3)
+        self.assertEqual(performance["fresh_process_count"], 6)
+        self.assertEqual(performance["candidate"]["median_evals_per_s"], 8.2)
+        self.assertEqual(performance["candidate_latency_s"]["p50_median"], 1.11)
+        self.assertEqual(performance["paired_median_speedup"], 1.02)
+        encoded = json.dumps(compact)
+        self.assertNotIn("per_frame_max_abs", encoded)
+        self.assertNotIn("warmup_latencies_s", encoded)
+        repeats = {"routes": [{"correctness": {"checks": {
+            "measured_energy_eV": {"per_frame_max_abs": [0.1, 0.2]}
+        }}}]}
+        self.assertEqual(repeats["routes"][0]["correctness"]["checks"]["measured_energy_eV"]["per_frame_max_abs"], [0.1, 0.2])
+
+    def test_compact_summary_cannot_hide_correctness_failure(self):
+        aggregate = synthetic_aggregate()
+        aggregate["pairs"][1]["routes"]["candidate"]["correctness"]["status"] = "CANDIDATE_INVALID"
+        compact = benchmark.compact_public_result(aggregate)
+        self.assertEqual(compact["status"], "CANDIDATE_INVALID")
+        self.assertEqual(compact["correctness_summary"]["status"], "CANDIDATE_INVALID")
+        self.assertEqual(compact["pairs"][1]["candidate"]["correctness"], "CANDIDATE_INVALID")
+
+    def test_fixed_submission_contract_and_sha_lines(self):
+        expected = {
+            "candidate.patch", "result.json", "repeats.json", "measurement-binding.json",
+            "submission-manifest.json", "image.json", "CHANGELOG.md", "SHA256SUMS",
+        }
+        self.assertEqual(flow.SUBMISSION_FILES, expected)
+        self.assertEqual(len(flow.SUBMISSION_FILES), 8)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in sorted(expected - {"SHA256SUMS"}):
+                (root / name).write_text(name + "\n")
+            payloads = sorted(root.iterdir())
+            lines = "".join(f"{flow.sha256(path)}  {path.name}\n" for path in payloads)
+            (root / "SHA256SUMS").write_text(lines)
+            for line in (root / "SHA256SUMS").read_text().splitlines():
+                digest, name = line.split("  ", 1)
+                self.assertEqual(digest, flow.sha256(root / name))
+
     def test_runtime_requirements_are_hash_locked(self):
         lines = flow.RUNTIME_REQUIREMENTS.read_text().splitlines()
         self.assertEqual(len(lines), 18)

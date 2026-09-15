@@ -50,6 +50,187 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
 
 
+COMPACT_FIELDS = {
+    "energy_eV": "measured_energy_eV",
+    "forces_eV_per_A": "measured_forces",
+    "virial_eV": "measured_virial",
+    "stress_eV_per_A3": "measured_stress",
+}
+
+
+def _compact_correctness_summary(pairs: list[dict[str, object]]) -> dict[str, object]:
+    """Aggregate correctness records without carrying per-frame arrays forward."""
+    routes = {"baseline": [], "candidate": []}
+    for pair in pairs:
+        for route in routes:
+            record = pair.get("routes", {}).get(route)
+            if not isinstance(record, dict):
+                raise ValueError(f"missing {route} correctness record in {pair.get('pair_id')}")
+            routes[route].append(record)
+
+    summary_routes: dict[str, object] = {}
+    tolerance_summary: dict[str, dict[str, float]] = {}
+    route_statuses: dict[str, str] = {}
+    for route, records in routes.items():
+        shapes: dict[str, list[int]] = {}
+        dtypes: dict[str, str] = {}
+        finite: dict[str, bool] = {}
+        max_abs: dict[str, float] = {}
+        measured_frames: int | None = None
+        route_status = "PASS"
+        for record in records:
+            correctness = record.get("correctness", {})
+            status = str(correctness.get("status", "FAIL"))
+            if status != "PASS":
+                route_status = status
+            checks = correctness.get("checks", {})
+            if not isinstance(checks, dict):
+                raise ValueError(f"missing correctness checks in {route} {record.get('pair_id')}")
+            for field, check_name in COMPACT_FIELDS.items():
+                check = checks.get(check_name)
+                if not isinstance(check, dict):
+                    raise ValueError(f"missing {check_name} correctness check")
+                shape = list(check.get("shape", []))
+                dtype = str(check.get("dtype", ""))
+                if not shape or not dtype:
+                    raise ValueError(f"incomplete {check_name} correctness check")
+                if field not in shapes:
+                    shapes[field] = shape
+                    dtypes[field] = dtype
+                    finite[field] = bool(check.get("finite", check.get("isfinite", False)))
+                    max_abs[field] = float(check["max_abs"])
+                else:
+                    if shape != shapes[field] or dtype != dtypes[field]:
+                        raise ValueError(f"inconsistent {field} shape/dtype across pairs")
+                    finite[field] = finite[field] and bool(
+                        check.get("finite", check.get("isfinite", False))
+                    )
+                    max_abs[field] = max(max_abs[field], float(check["max_abs"]))
+                frames = int(shape[0])
+                if measured_frames is None:
+                    measured_frames = frames
+                elif measured_frames != frames:
+                    raise ValueError("inconsistent measured frame count across fields")
+                atol, rtol = float(check["atol"]), float(check["rtol"])
+                prior = tolerance_summary.get(field)
+                value = {"atol": atol, "rtol": rtol}
+                if prior is not None and prior != value:
+                    raise ValueError(f"inconsistent tolerance for {field}")
+                tolerance_summary[field] = value
+        summary_routes[route] = {
+            "measured_frames": measured_frames,
+            "shape": shapes,
+            "dtype": dtypes,
+            "isfinite": finite,
+            "max_abs": max_abs,
+        }
+        route_statuses[route] = route_status
+
+    if route_statuses["baseline"] != "PASS":
+        overall = "BENCHMARK_INVALID"
+    elif route_statuses["candidate"] != "PASS":
+        overall = "CANDIDATE_INVALID"
+    else:
+        overall = "PASS"
+    return {
+        "status": overall,
+        "routes": summary_routes,
+        "tolerance": tolerance_summary,
+    }
+
+
+def compact_public_result(
+    aggregate: dict[str, object], *, warmup: int = 20, measured: int = 500
+) -> dict[str, object]:
+    """Return the compact public result while leaving full evidence in repeats.json."""
+    pairs = aggregate.get("pairs")
+    if not isinstance(pairs, list):
+        raise ValueError("aggregate pairs are missing")
+    if not pairs:
+        raise ValueError("aggregate pairs are empty")
+    correctness = _compact_correctness_summary(pairs)
+    pair_speedups = [float(pair["speedup_candidate_over_baseline"]) for pair in pairs]
+    compact_pairs = []
+    latencies = {"baseline": [], "candidate": []}
+    for pair in pairs:
+        compact_routes = {}
+        for route in ("baseline", "candidate"):
+            record = pair["routes"][route]
+            latency = record["latency"]
+            latencies[route].append(latency)
+            compact_routes[route] = {
+                "latency": {
+                    key: float(latency[key])
+                    for key in ("mean_s", "p50_s", "p90_s", "p99_s", "cv")
+                },
+                "throughput": {
+                    "evals_per_s": float(latency["throughput_evals_per_s"]),
+                    "atoms_per_s": float(latency["throughput_atoms_per_s"]),
+                },
+                "correctness": record["correctness"]["status"],
+            }
+        compact_pairs.append({
+            "pair_id": pair["pair_id"],
+            "order": pair["order"],
+            **compact_routes,
+            "speedup_candidate_over_baseline": float(
+                pair["speedup_candidate_over_baseline"]
+            ),
+        })
+
+    def median(route: str, key: str) -> float:
+        return float(statistics.median(float(item[key]) for item in latencies[route]))
+
+    performance = {
+        "fresh_pair_count": len(pairs),
+        "fresh_process_count": len(pairs) * 2,
+        "baseline": {
+            "median_evals_per_s": median("baseline", "throughput_evals_per_s"),
+            "median_atoms_per_s": median("baseline", "throughput_atoms_per_s"),
+            "runtime_cv_median": median("baseline", "cv"),
+        },
+        "candidate": {
+            "median_evals_per_s": median("candidate", "throughput_evals_per_s"),
+            "median_atoms_per_s": median("candidate", "throughput_atoms_per_s"),
+            "runtime_cv_median": median("candidate", "cv"),
+        },
+        "candidate_latency_s": {
+            "p50_median": median("candidate", "p50_s"),
+            "p90_median": median("candidate", "p90_s"),
+            "p99_median": median("candidate", "p99_s"),
+        },
+        "pair_speedups_candidate_over_baseline": pair_speedups,
+        "paired_median_speedup": (
+            float(statistics.median(pair_speedups)) if pair_speedups else None
+        ),
+    }
+    status = str(aggregate.get("status", "BENCHMARK_INVALID"))
+    if status == "PASS" and correctness["status"] != "PASS":
+        status = str(correctness["status"])
+    return {
+        "schema_version": aggregate["schema_version"],
+        "result_format": "compact",
+        "status": status,
+        "score_type": aggregate.get("score_type", "public_self_test"),
+        "verified": bool(aggregate.get("verified", False)),
+        "formal_performance": "NOT_RUN_BY_SCOPE",
+        "protocol": {
+            "pair_order": [str(pair["order"]) for pair in pairs],
+            "pair_count": len(pairs),
+            "warmup": warmup,
+            "measured": measured,
+        },
+        "benchmark_tolerance": aggregate.get("benchmark_tolerance"),
+        "pair_speedups_candidate_over_baseline": pair_speedups,
+        "paired_median_speedup": (
+            performance["paired_median_speedup"] if status == "PASS" else None
+        ),
+        "pairs": compact_pairs,
+        "correctness_summary": correctness,
+        "performance_summary": performance,
+    }
+
+
 def load_tolerance(path: Path) -> dict[str, object]:
     config = json.loads(path.read_text())
     if config.get("schema_version") != "dpa4c-ppu-contest.benchmark-tolerance.v1":
@@ -324,7 +505,9 @@ def run_benchmark(args) -> dict[str, object]:
                  "pair_speedups_candidate_over_baseline": speedups, "pairs": pair_records}
     write_json(root / "formal-aggregate.json", aggregate)
     write_json(root / "repeats.json", {"schema_version": PROTOCOL, "routes": records})
-    write_json(root / "result.json", aggregate)
+    write_json(root / "result.json", compact_public_result(
+        aggregate, warmup=args.warmup, measured=args.measured
+    ))
     with (root / "formal-repeat.csv").open("w", newline="") as stream:
         writer = csv.writer(stream)
         writer.writerow(["pair_id", "order", "route", "pid", "correctness", "mean_s", "p50_s", "p90_s", "p99_s", "cv", "evals_per_s", "atoms_per_s", "result_npz_sha256"])

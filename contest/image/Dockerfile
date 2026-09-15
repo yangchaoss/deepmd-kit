@@ -1,2 +1,59 @@
-# Image construction is intentionally deferred until stages A-D pass.
-FROM registry.dp.tech/dptech/dp/native/prod-87/training-xpu-pytorch:26.04.post1
+FROM registry.dp.tech/dptech/dp/native/prod-27666/4553069/dpa4c-nano-rc1-runtime-probe:20260911-yangchao-r1@sha256:f475eb7a0488b8785818b506fc17e9c411b7ef526fdae2d974c62a5c42937061
+
+ENV DPA4C_CONTESTANT_ROOT=/opt/dpa4c-contestant-kit \
+    DPA4C_CONTEST_WHEELHOUSE=/opt/dpa4c-contest-wheelhouse \
+    PPU_SDK=/usr/local/PPU_SDK \
+    CUDA_HOME=/usr/local/PPU_SDK/CUDA_SDK \
+    CUDA_PATH=/usr/local/PPU_SDK/CUDA_SDK \
+    CUDAToolkit_ROOT=/usr/local/PPU_SDK/CUDA_SDK
+
+RUN set -eux; \
+    test -x /opt/ac2/bin/python; \
+    test -x "$CUDA_HOME/bin/nvcc"; \
+    command -v git; \
+    /opt/ac2/bin/python -c 'import torch; assert torch.__version__ == "2.9.0+ali.10.ppu2.1.0.cu130"; assert str(torch.version.cuda) == "13.0"'
+
+RUN set -eux; \
+    rm -rf "$DPA4C_CONTESTANT_ROOT" "$DPA4C_CONTEST_WHEELHOUSE"; \
+    for attempt in 1 2 3; do \
+      git -c http.version=HTTP/1.1 clone \
+        --depth 1 \
+        --branch dpa4c-ppu-nano-starter-v1.0.0-rc3 \
+        --single-branch \
+        https://github.com/yangchaoss/deepmd-kit.git \
+        "$DPA4C_CONTESTANT_ROOT" && break; \
+      rm -rf "$DPA4C_CONTESTANT_ROOT"; \
+      test "$attempt" -lt 3; \
+      sleep 5; \
+    done; \
+    test "$(git -C "$DPA4C_CONTESTANT_ROOT" rev-parse HEAD)" = 15cebe0f6b79d1e37ba8bb8b8b022168bea4758e; \
+    test "$(git -C "$DPA4C_CONTESTANT_ROOT" rev-parse HEAD^{tree})" = 0d89c777fe1f0ebd21844046da56ace126774070; \
+    test -z "$(git -C "$DPA4C_CONTESTANT_ROOT" status --porcelain)"; \
+    test "$(git -C "$DPA4C_CONTESTANT_ROOT" remote get-url origin)" = "https://github.com/yangchaoss/deepmd-kit.git"
+
+RUN set -eux; \
+    mkdir -p "$DPA4C_CONTEST_WHEELHOUSE"; \
+    /opt/ac2/bin/python -m pip download \
+      --only-binary=:all: --no-deps --require-hashes \
+      --dest "$DPA4C_CONTEST_WHEELHOUSE" \
+      -r "$DPA4C_CONTESTANT_ROOT/contest/config/build-requirements.txt" \
+      -r "$DPA4C_CONTESTANT_ROOT/contest/config/runtime-requirements.txt"; \
+    /opt/ac2/bin/python -c 'import hashlib,json,pathlib; root=pathlib.Path("/opt/dpa4c-contestant-kit"); wheelhouse=pathlib.Path("/opt/dpa4c-contest-wheelhouse"); manifest=json.loads((root/"contest/config/wheelhouse-manifest.json").read_text()); items=manifest["locks"]["build"]["files"]+manifest["locks"]["runtime"]["files"]; bad=[item["filename"] for item in items if not (wheelhouse/item["filename"]).is_file() or hashlib.sha256((wheelhouse/item["filename"]).read_bytes()).hexdigest()!=item["sha256"]]; assert len(items)==24 and not bad, (len(items),bad)'
+
+RUN set -eux; \
+    /opt/ac2/bin/python -m pip install \
+      --no-index --find-links "$DPA4C_CONTEST_WHEELHOUSE" \
+      --no-deps --require-hashes --ignore-installed \
+      -r "$DPA4C_CONTESTANT_ROOT/contest/config/runtime-requirements.txt"; \
+    ln -s "$DPA4C_CONTESTANT_ROOT/contest/contest.sh" /usr/local/bin/dpa4c-contestant-flow; \
+    test -x /usr/local/bin/dpa4c-contestant-flow
+
+LABEL org.opencontainers.image.source="https://github.com/yangchaoss/deepmd-kit" \
+      org.opencontainers.image.version="dpa4c-ppu-nano-starter-v1.0.0-rc3" \
+      com.dptech.dpa4c.source-commit="15cebe0f6b79d1e37ba8bb8b8b022168bea4758e" \
+      com.dptech.dpa4c.source-tree="0d89c777fe1f0ebd21844046da56ace126774070" \
+      com.dptech.dpa4c.runtime-base="registry.dp.tech/dptech/dp/native/prod-27666/4553069/dpa4c-nano-rc1-runtime-probe:20260911-yangchao-r1@sha256:f475eb7a0488b8785818b506fc17e9c411b7ef526fdae2d974c62a5c42937061" \
+      com.dptech.dpa4c.runtime-contract="ppu-sdk-2.1_cuda-13.0_torch-2.9.0" \
+      com.dptech.dpa4c.wheelhouse="24-wheel-hash-locked"
+
+WORKDIR /workspace

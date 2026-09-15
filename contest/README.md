@@ -65,12 +65,19 @@ speedups; a value below 1 remains a valid PASS when protocol and correctness
 pass. This is not an organizer-verified score and contains no private seeds,
 runner, or validator.
 
-`all` is exactly `build`, `test`, `benchmark`, then `package`. `image` only
+The `all` command expands in exactly this order: `build` → `test` →
+`benchmark` → `package`. `image` only
 writes a controlled `NOT_RUN` status and never contacts Bohrium. No command
 creates, stops, deletes, or restarts a sandbox, pushes Git, builds an image, or
 runs a private formal benchmark. Historical commits may be selected only with
 an explicit immutable `--starter-ref`; the default is the frozen starter tag
 declared above.
+
+The public aggregate `result.json` is a compact summary: it contains pair
+latency/throughput aggregates, correctness maxima and tolerances, and median
+performance statistics. The complete per-frame correctness and route evidence
+remains in `repeats.json`; packaging binds the compact result SHA rather than
+duplicating those arrays.
 
 The runtime image recipe is a separate, later release step. It must clone this
 public repository at the immutable starter tag during image construction; the
