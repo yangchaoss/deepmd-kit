@@ -18,12 +18,41 @@ failed the isolation gate; rc1, rc2, and rc3 remain history only.
 The organizer calls one tracked entrypoint.  Assets remain external and are
 accepted only at the frozen SHA-256 values in `config/runtime.json`.
 
+## Short contestant flow
+
+```text
+clone the public starter (or enter the repository already present in the runtime image)
+  -> mount the two fixed assets under --assets-root
+  -> ./contest/contest.sh all --profile quick
+  -> make and commit the candidate change
+  -> ./contest/contest.sh all --profile full
+  -> submit the generated eight-file submission directory
+```
+
+The organization provides or mounts these files; no download URL is implied:
+
+| file | expected SHA-256 |
+|---|---|
+| `DPA4C-Nano-OMat24-v20260819.pt` | `f894ac16adfb7f5030d4fe4e2849db6c608f9c7074badfafb4a50c9b9afed00a` |
+| `common-structure-1024.extxyz` | `137056e51cf63bd7dabf0508a29959218baf109da0c5e19a3765d11873c891e7` |
+
+Example asset root: `/workspace/dpa4c-contest/assets` (or pass another
+`--assets-root`). Missing files or SHA mismatches fail before build/compute.
+
 ```bash
 ./contest/contest.sh build --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets
 ./contest/contest.sh test  --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets
 ./contest/contest.sh benchmark --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc4
 ./contest/contest.sh package --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc4
 ```
+
+The default profile is `quick`: one public baseline/candidate pair with 2
+warmup and 10 measured frames. Its result is marked
+`score_type=development_quick`, `verified=false`, and
+`formal_performance=NOT_RUN`; it never creates a submission. `full` retains
+the public self-test protocol of three fresh pairs in AB/BA/AB order with 20
+warmup and 500 measured frames. Both profiles use the same worker, timer,
+synchronization, input generation, and E/F/virial/stress checks.
 
 `build` creates a candidate virtual environment outside the checkout, builds a
 non-editable wheel from the current committed tree, installs that wheel, then
@@ -67,7 +96,8 @@ pass. This is not an organizer-verified score and contains no private seeds,
 runner, or validator.
 
 The `all` command expands in exactly this order: `build` → `test` →
-`benchmark` → `package`. `image` only
+`benchmark` → `package` (the package stage is explicitly skipped for quick,
+or for full with no candidate change). `image` only
 writes a controlled `NOT_RUN` status and never contacts Bohrium. No command
 creates, stops, deletes, or restarts a sandbox, pushes Git, builds an image, or
 runs a private formal benchmark. Historical commits may be selected only with

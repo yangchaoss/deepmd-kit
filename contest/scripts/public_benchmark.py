@@ -211,6 +211,7 @@ def compact_public_result(
         "schema_version": aggregate["schema_version"],
         "result_format": "compact",
         "status": status,
+        "profile": aggregate.get("profile", "full"),
         "score_type": aggregate.get("score_type", "public_self_test"),
         "verified": bool(aggregate.get("verified", False)),
         "formal_performance": "NOT_RUN_BY_SCOPE",
@@ -269,16 +270,20 @@ def load_atoms(structure: Path):
     return read(structure, index=0)
 
 
-def generate_sequences(structure: Path, *, warmup: int = 20, measured: int = 500):
+def generate_sequences(
+    structure: Path, *, warmup: int = 20, measured: int = 500, pair_count: int = 3
+):
     atoms = load_atoms(structure)
 
     if len(atoms) != 1024 or not bool(np.all(atoms.pbc)):
         raise RuntimeError("public benchmark requires the fixed periodic 1024-atom structure")
     base = np.asarray(atoms.positions, dtype=np.float64)
     cell = np.asarray(atoms.cell.array, dtype=np.float64)
+    if pair_count < 1 or pair_count > len(PUBLIC_SEEDS):
+        raise RuntimeError(f"pair_count must be between 1 and {len(PUBLIC_SEEDS)}")
     pairs = []
     all_hashes: set[str] = set()
-    for number, seed in enumerate(PUBLIC_SEEDS, start=1):
+    for number, seed in enumerate(PUBLIC_SEEDS[:pair_count], start=1):
         rng = np.random.default_rng(seed)
         frames, hashes = [], []
         for index in range(warmup + measured):
@@ -408,9 +413,13 @@ def run_benchmark(args) -> dict[str, object]:
     root = args.output_root.resolve()
     root.mkdir(parents=True, exist_ok=False)
     status_path = root / "BENCHMARK_STATUS.json"
+    score_type = "development_quick" if args.profile == "quick" else "public_self_test"
+    pair_orders = PAIR_ORDERS[:args.pair_count]
     status = {"schema_version": PROTOCOL, "status": "RUNNING",
-              "score_type": "public_self_test", "verified": False,
-              "pair_order": ["AB", "BA", "AB"], "pair_count": 3,
+              "profile": args.profile, "score_type": score_type, "verified": False,
+              "pair_order": ["AB" if order == ("baseline", "candidate") else "BA"
+                              for order in pair_orders],
+              "pair_count": args.pair_count,
               "warmup": args.warmup, "measured": args.measured,
               "formal_performance": "NOT_RUN_BY_SCOPE"}
     write_json(status_path, status)
@@ -421,7 +430,10 @@ def run_benchmark(args) -> dict[str, object]:
                           "fields": tolerance["fields"]}
     status["benchmark_tolerance"] = tolerance_identity
     write_json(status_path, status)
-    pairs = generate_sequences(args.structure, warmup=args.warmup, measured=args.measured)
+    pairs = generate_sequences(
+        args.structure, warmup=args.warmup, measured=args.measured,
+        pair_count=args.pair_count,
+    )
     env = dict(os.environ)
     for name in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "CONDA_PREFIX",
                  "CONDA_DEFAULT_ENV", "PYTHONUSERBASE", "LD_PRELOAD"):
@@ -430,7 +442,7 @@ def run_benchmark(args) -> dict[str, object]:
                 "DP_TF32_INFER": "0", "DP_AMP_INFER": "0"})
     records, pair_records = [], []
     overall = "PASS"
-    for pair, routes in zip(pairs, PAIR_ORDERS, strict=True):
+    for pair, routes in zip(pairs, pair_orders, strict=True):
         pair_id = str(pair["pair_id"])
         pair_dir = root / pair_id
         pair_dir.mkdir()
@@ -496,9 +508,12 @@ def run_benchmark(args) -> dict[str, object]:
         if overall != "PASS":
             break
     speedups = [float(pair["speedup_candidate_over_baseline"]) for pair in pair_records]
-    final_status = overall if overall != "PASS" else ("PASS" if len(pair_records) == 3 else "BENCHMARK_INVALID")
+    final_status = overall if overall != "PASS" else (
+        "PASS" if len(pair_records) == args.pair_count else "BENCHMARK_INVALID"
+    )
     aggregate = {"schema_version": "dpa4c-ppu-contest.public-aggregate.v1",
-                 "status": final_status, "score_type": "public_self_test", "verified": False,
+                 "status": final_status, "profile": args.profile,
+                 "score_type": score_type, "verified": False,
                  "paired_median_speedup": (
                      float(statistics.median(speedups)) if final_status == "PASS" else None
                  ), "benchmark_tolerance": tolerance_identity,
@@ -536,6 +551,8 @@ def main() -> int:
     parser.add_argument("--benchmark-tolerance", type=Path, required=True)
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--measured", type=int, default=500)
+    parser.add_argument("--pair-count", type=int, default=3)
+    parser.add_argument("--profile", choices=("quick", "full"), default="full")
     args = parser.parse_args()
     try:
         result = run_benchmark(args)
@@ -543,9 +560,11 @@ def main() -> int:
     except Exception as exc:
         args.output_root.mkdir(parents=True, exist_ok=True)
         status = getattr(exc, "status", "BENCHMARK_INVALID")
+        score_type = "development_quick" if args.profile == "quick" else "public_self_test"
         write_json(args.output_root / "BENCHMARK_STATUS.json",
                    {"schema_version": PROTOCOL, "status": status,
-                    "score_type": "public_self_test", "verified": False,
+                    "profile": args.profile, "score_type": score_type,
+                    "verified": False, "pair_count": args.pair_count,
                     "error_type": type(exc).__name__, "error": str(exc),
                     "formal_performance": "NOT_RUN_BY_SCOPE"})
         print(json.dumps({"status": status, "error": str(exc)}), file=sys.stderr)

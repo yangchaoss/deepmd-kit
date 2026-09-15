@@ -296,6 +296,15 @@ class PublicBenchmarkTest(unittest.TestCase):
                             set(pair["frame_hashes"][2:]) for pair in pairs))
         self.assertEqual(benchmark.PUBLIC_SEEDS, (510421, 620531, 730637))
 
+    def test_quick_sequence_is_one_pair_with_short_protocol(self):
+        with mock.patch.object(benchmark, "load_atoms", return_value=FakeAtoms()):
+            pairs = benchmark.generate_sequences(
+                Path("unused"), warmup=2, measured=10, pair_count=1
+            )
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(len(pairs[0]["frames"]), 12)
+        self.assertEqual(pairs[0]["seed"], 510421)
+
     def test_correctness_status_classification(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -420,13 +429,92 @@ class PublicBenchmarkTest(unittest.TestCase):
 
     def test_all_order(self):
         calls = []
-        args = Namespace(command="all")
+        args = Namespace(command="all", profile="full", starter_ref="base",
+                          run_root=Path("/tmp/flow-test"))
         with (mock.patch.object(flow, "build", side_effect=lambda _: calls.append("build")),
               mock.patch.object(flow, "test", side_effect=lambda _: calls.append("test")),
               mock.patch.object(flow, "benchmark", side_effect=lambda _: calls.append("benchmark")),
-              mock.patch.object(flow, "package", side_effect=lambda _: calls.append("package"))):
+              mock.patch.object(flow, "package", side_effect=lambda _: calls.append("package")),
+              mock.patch.object(flow, "candidate_change_status",
+                                return_value={"candidate_change": "CANDIDATE_CHANGE_PRESENT"}),
+              mock.patch.object(flow, "write_flow_status")):
             flow.execute_command(args)
         self.assertEqual(calls, ["build", "test", "benchmark", "package"])
+
+    def test_profiles_are_fixed_and_full_keeps_rc4_protocol(self):
+        self.assertEqual(flow.profile_config("quick"), {
+            "pair_count": 1, "warmup": 2, "measured": 10,
+            "score_type": "development_quick", "verified": False,
+            "package": False,
+        })
+        self.assertEqual(flow.profile_config("full"), {
+            "pair_count": 3, "warmup": 20, "measured": 500,
+            "score_type": "public_self_test", "verified": False,
+            "package": True,
+        })
+
+    def test_all_quick_skips_package_and_writes_status(self):
+        calls = []
+        args = Namespace(command="all", profile="quick", starter_ref="base",
+                          run_root=Path("/tmp/flow-test"))
+        with (mock.patch.object(flow, "build", side_effect=lambda _: calls.append("build")),
+              mock.patch.object(flow, "test", side_effect=lambda _: calls.append("test")),
+              mock.patch.object(flow, "benchmark", side_effect=lambda _: calls.append("benchmark")),
+              mock.patch.object(flow, "package", side_effect=lambda _: calls.append("package")),
+              mock.patch.object(flow, "candidate_change_status",
+                                return_value={"candidate_change": "NO_CANDIDATE_CHANGE"}),
+              mock.patch.object(flow, "write_flow_status") as write_status):
+            flow.execute_command(args)
+        self.assertEqual(calls, ["build", "test", "benchmark"])
+        payload = write_status.call_args.args[1]
+        self.assertEqual(payload["package"], "PACKAGE_SKIPPED")
+
+    def test_package_rejects_quick_before_reading_run_root(self):
+        args = Namespace(profile="quick")
+        with self.assertRaisesRegex(RuntimeError, "PACKAGE_SKIPPED"):
+            flow.package(args)
+
+    def test_build_reuse_requires_exact_identity_and_complete_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate_python = root / "install/candidate-venv/bin/python"
+            wheel = root / "build/wheels/deepmd_kit.whl"
+            entry = root / "install/site-packages/dpa4c_candidate"
+            candidate_python.parent.mkdir(parents=True)
+            wheel.parent.mkdir(parents=True)
+            entry.mkdir(parents=True)
+            candidate_python.write_text("python\n")
+            wheel.write_text("wheel\n")
+            expected = {"source": {"commit": "c", "tree": "t"}, "deps": "d"}
+            status = {
+                "status": "PASS", "build_inputs": expected,
+                "candidate_python": str(candidate_python),
+                "wheel": {"path": str(wheel)},
+                "candidate_entry": {"path": str(entry)},
+            }
+            results = root / "results"
+            results.mkdir()
+            (results / "BUILD_STATUS.json").write_text(json.dumps(status))
+            reused = flow.reusable_build_status(root, expected)
+            self.assertEqual(reused["build_inputs"], expected)
+            self.assertTrue((results / "BUILD_REUSE.json").is_file())
+            with self.assertRaisesRegex(RuntimeError, "identity mismatch"):
+                flow.reusable_build_status(root, {"source": {"commit": "new", "tree": "t"}, "deps": "d"})
+
+    def test_contest_entrypoint_resolves_repository_symlink(self):
+        repo = Path(__file__).parents[2]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            link = root / "dpa4c-contestant-flow"
+            link.symlink_to(repo / "contest/contest.sh")
+            result = subprocess.run(
+                [str(link), "image", "--run-root", str(root / "run"),
+                 "--assets-root", str(root / "assets")],
+                text=True, capture_output=True,
+            )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("missing model:", result.stderr)
+        self.assertNotIn("can't open file", result.stderr)
 
     def test_rc4_is_the_only_default_starter(self):
         self.assertEqual(flow.DEFAULT_STARTER_REF, "dpa4c-ppu-nano-starter-v1.0.0-rc4")

@@ -35,6 +35,24 @@ SUBMISSION_FILES = frozenset({
     "candidate.patch", "result.json", "repeats.json", "measurement-binding.json",
     "submission-manifest.json", "image.json", "CHANGELOG.md", "SHA256SUMS",
 })
+PROFILE_CONFIG = {
+    "quick": {
+        "pair_count": 1,
+        "warmup": 2,
+        "measured": 10,
+        "score_type": "development_quick",
+        "verified": False,
+        "package": False,
+    },
+    "full": {
+        "pair_count": 3,
+        "warmup": 20,
+        "measured": 500,
+        "score_type": "public_self_test",
+        "verified": False,
+        "package": True,
+    },
+}
 
 
 def sha256(path: Path) -> str:
@@ -43,6 +61,13 @@ def sha256(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def profile_config(name: str) -> dict[str, object]:
+    try:
+        return dict(PROFILE_CONFIG[name])
+    except KeyError as exc:
+        raise RuntimeError(f"unsupported profile: {name}") from exc
 
 
 def validate_wheelhouse(path: Path) -> dict[str, object]:
@@ -376,6 +401,67 @@ def same_source(recorded: dict[str, object], current: dict[str, str]) -> bool:
     return all(recorded.get(key) == current[key] for key in ("commit", "tree"))
 
 
+def build_input_identity(
+    source: dict[str, str], config: dict[str, object],
+    wheelhouse: dict[str, object], baseline_python: Path,
+) -> dict[str, object]:
+    """Return the small immutable identity needed for same-run-root reuse."""
+    return {
+        "source": {"commit": source["commit"], "tree": source["tree"]},
+        "baseline_python": str(baseline_python.resolve()),
+        "runtime_config_sha256": sha256(CONFIG),
+        "candidate_manifest_sha256": sha256(CANDIDATE_MANIFEST),
+        "build_requirements_sha256": sha256(BUILD_REQUIREMENTS),
+        "runtime_requirements_sha256": sha256(RUNTIME_REQUIREMENTS),
+        "wheelhouse_manifest_sha256": sha256(WHEELHOUSE_MANIFEST),
+        "wheelhouse_path": wheelhouse["path"],
+        "wheelhouse_locks": {
+            group: {
+                "path": wheelhouse["locks"][group]["path"],
+                "sha256": wheelhouse["locks"][group]["sha256"],
+                "files": [
+                    {"filename": item["filename"], "sha256": item["actual_sha256"]}
+                    for item in wheelhouse["locks"][group]["files"]
+                ],
+            }
+            for group in ("build", "runtime")
+        },
+    }
+
+
+def reusable_build_status(
+    run_root: Path, expected_inputs: dict[str, object]
+) -> dict[str, object] | None:
+    """Reuse only a complete build with identical source/config/dependency identity."""
+    status_path = run_root / "results" / "BUILD_STATUS.json"
+    if not status_path.is_file():
+        return None
+    status = json.loads(status_path.read_text())
+    if status.get("status") != "PASS":
+        raise RuntimeError("existing BUILD_STATUS is not PASS; use a fresh run-root")
+    recorded = status.get("build_inputs")
+    if recorded != expected_inputs:
+        raise RuntimeError(
+            "existing build identity mismatch; rebuild in a fresh run-root"
+        )
+    required = (
+        Path(status.get("candidate_python", "")),
+        Path(status.get("wheel", {}).get("path", "")),
+        Path(status.get("candidate_entry", {}).get("path", "")),
+    )
+    if any(not path.is_file() and not path.is_dir() for path in required):
+        raise RuntimeError("existing build artifacts are incomplete; use a fresh run-root")
+    (run_root / "results" / "BUILD_REUSE.json").write_text(
+        json.dumps({
+            "status": "PASS",
+            "reused": True,
+            "reason": "source/config/dependency/install identity unchanged",
+            "build_inputs": expected_inputs,
+        }, indent=2) + "\n"
+    )
+    return status
+
+
 def runtime_identity_gate(
     args, build_status: dict[str, object], *, output_name: str, log_prefix: str
 ) -> dict[str, object]:
@@ -416,9 +502,15 @@ def build(args) -> None:
     git(["ls-files", "--error-unmatch", str(WHEELHOUSE_MANIFEST.relative_to(ROOT))])
     wheelhouse_identity = resolve_wheelhouse()
     wheelhouse = Path(wheelhouse_identity["path"])
+    baseline_python = Path(args.baseline_python or config["baseline_python"])
+    expected_inputs = build_input_identity(
+        identity, config, wheelhouse_identity, baseline_python
+    )
+    reused = reusable_build_status(run_root, expected_inputs)
+    if reused is not None:
+        return
     for name in ("build", "install", "logs", "results"):
         (run_root / name).mkdir(parents=True, exist_ok=True)
-    baseline_python = Path(args.baseline_python or config["baseline_python"])
     python = candidate_python(run_root)
     if not python.is_file():
         run([str(baseline_python), "-m", "venv", "--system-site-packages", str(python.parents[1])], cwd=run_root, log=run_root / "logs" / "01-venv.log", env=clean_env(baseline_python))
@@ -484,6 +576,7 @@ def build(args) -> None:
         "schema_version": "dpa4c-ppu-contest.build.v1",
         "status": "PASS",
         "source": identity,
+        "build_inputs": expected_inputs,
         "tracked_candidate_manifest": {
             "path": str(CANDIDATE_MANIFEST.relative_to(ROOT)),
             "sha256": sha256(CANDIDATE_MANIFEST),
@@ -547,7 +640,9 @@ def test(args) -> None:
     )
     runtime_status_path = run_root / "results" / "RUNTIME_IDENTITY_STATUS.json"
     if runtime_status["status"] != "PASS":
-        raise RuntimeError(runtime_status["status"])
+        raise RuntimeError(
+            f"{runtime_status['status']}: installed runtime identity is stale; rerun build in a fresh run-root"
+        )
     runtime_status["workers_started"] = True
     runtime_status_path.write_text(json.dumps(runtime_status, indent=2) + "\n")
     baseline_out = run_root / "results" / "smoke-baseline"
@@ -559,6 +654,7 @@ def test(args) -> None:
 
 def benchmark(args) -> None:
     config, run_root, model, structure = resolve_inputs(args)
+    profile = profile_config(args.profile)
     current = source_identity()
     build_status = json.loads((run_root / "results" / "BUILD_STATUS.json").read_text())
     smoke_status = json.loads((run_root / "results" / "SMOKE_STATUS.json").read_text())
@@ -571,7 +667,9 @@ def benchmark(args) -> None:
         log_prefix="benchmark-pre",
     )
     if pre["status"] != "PASS":
-        raise RuntimeError(pre["status"])
+        raise RuntimeError(
+            f"{pre['status']}: installed runtime identity is stale; rerun build in a fresh run-root"
+        )
     benchmark_root = run_root / "results" / "public-benchmark"
     if benchmark_root.exists():
         raise RuntimeError(f"benchmark output already exists: {benchmark_root}")
@@ -582,7 +680,11 @@ def benchmark(args) -> None:
          "--output-root", str(benchmark_root), "--baseline-python", str(baseline_python),
          "--candidate-python", str(candidate), "--worker", str(BENCHMARK_WORKER),
          "--model", str(model), "--structure", str(structure),
-         "--benchmark-tolerance", str(BENCHMARK_TOLERANCE)],
+         "--benchmark-tolerance", str(BENCHMARK_TOLERANCE),
+         "--pair-count", str(profile["pair_count"]),
+         "--warmup", str(profile["warmup"]),
+         "--measured", str(profile["measured"]),
+         "--profile", args.profile],
         cwd=run_root, log=run_root / "logs" / "benchmark.log", env=clean_env(baseline_python),
     )
     benchmark_status = json.loads((benchmark_root / "BENCHMARK_STATUS.json").read_text())
@@ -607,7 +709,8 @@ def benchmark(args) -> None:
     starter_commit = git(["rev-parse", f"{args.starter_ref}^{{commit}}"])
     binding = {
         "schema_version": "dpa4c-ppu-contest.measurement-binding.v1",
-        "status": "PASS", "score_type": "public_self_test", "verified": False,
+        "status": "PASS", "profile": args.profile,
+        "score_type": profile["score_type"], "verified": profile["verified"],
         "starter": {"ref": args.starter_ref, "resolved_commit": starter_commit},
         "source": after,
         "tracked_candidate_manifest": build_status["tracked_candidate_manifest"],
@@ -632,8 +735,9 @@ def benchmark(args) -> None:
         "assets": build_status["assets"],
         "benchmark_tolerance": benchmark_tolerance_identity(),
         "protocol": {"version": "dpa4c-ppu-contest.public-benchmark.v1",
-                     "warmup": 20, "measured": 500, "pairs": 3,
-                     "order": ["AB", "BA", "AB"]},
+                     "warmup": profile["warmup"], "measured": profile["measured"],
+                     "pairs": profile["pair_count"],
+                     "order": ["AB", "BA", "AB"][:profile["pair_count"]]},
         "pair_manifests": pair_manifests,
         "result": {"path": str(benchmark_root / "result.json"),
                    "sha256": sha256(benchmark_root / "result.json"),
@@ -652,6 +756,31 @@ def changed_files(repo: Path, starter: str, candidate: str) -> list[str]:
         ["git", "-C", str(repo), "diff", "--name-only", "-z", starter, candidate]
     )
     return [name.decode() for name in output.split(b"\0") if name]
+
+
+def candidate_change_status(args) -> dict[str, object]:
+    starter = git(["rev-parse", f"{args.starter_ref}^{{commit}}"])
+    current = source_identity()
+    files = changed_files(ROOT, starter, current["commit"])
+    return {
+        "status": "PASS",
+        "candidate_change": "CANDIDATE_CHANGE_PRESENT" if files else "NO_CANDIDATE_CHANGE",
+        "changed_files": files,
+        "starter": {"ref": args.starter_ref, "resolved_commit": starter},
+        "candidate": current,
+    }
+
+
+def write_flow_status(args, payload: dict[str, object]) -> None:
+    payload = {
+        "schema_version": "dpa4c-ppu-contest.flow-status.v1",
+        "profile": args.profile,
+        "formal_performance": "NOT_RUN_BY_SCOPE",
+        **payload,
+    }
+    target = args.run_root.resolve() / "results" / "FLOW_STATUS.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(payload, indent=2) + "\n")
 
 
 def reject_binary_implementation_files(paths: list[str]) -> None:
@@ -687,11 +816,16 @@ def make_patch(repo: Path, starter: str, candidate: str, output: Path) -> dict[s
 
 
 def package(args) -> None:
+    profile = profile_config(args.profile)
+    if not profile["package"]:
+        raise RuntimeError("PACKAGE_SKIPPED: quick profile never creates a formal submission")
     _, run_root, _, _ = resolve_inputs(args)
     current = source_identity()
     benchmark_root = run_root / "results" / "public-benchmark"
     benchmark_status = json.loads((benchmark_root / "BENCHMARK_STATUS.json").read_text())
     binding = json.loads((benchmark_root / "measurement-binding.json").read_text())
+    if binding.get("profile") != "full":
+        raise RuntimeError("PACKAGE_SKIPPED: submission requires a full profile binding")
     starter = git(["rev-parse", f"{args.starter_ref}^{{commit}}"])
     validate_package_gate(benchmark_status, binding, current, args.starter_ref, starter)
     output = run_root / "submission"
@@ -747,6 +881,16 @@ def validate_package_gate(
         raise RuntimeError("measured commit/tree differs from current candidate")
     if binding.get("starter") != {"ref": starter_ref, "resolved_commit": starter_commit}:
         raise RuntimeError("starter ref differs from measured binding")
+    if binding.get("profile") != "full" or binding.get("protocol") != {
+        "version": "dpa4c-ppu-contest.public-benchmark.v1",
+        "warmup": 20,
+        "measured": 500,
+        "pairs": 3,
+        "order": ["AB", "BA", "AB"],
+    }:
+        raise RuntimeError("package requires the full 3-pair 20+500 binding")
+    if binding.get("verified") is not False:
+        raise RuntimeError("public self-test binding must remain verified=false")
 
 
 def execute_command(args) -> None:
@@ -764,7 +908,25 @@ def execute_command(args) -> None:
         build(args)
         test(args)
         benchmark(args)
-        package(args)
+        change = candidate_change_status(args)
+        if args.profile == "quick":
+            write_flow_status(args, {
+                **change,
+                "package": "PACKAGE_SKIPPED",
+                "reason": "development quick profile does not produce a submission",
+            })
+        elif change["candidate_change"] == "NO_CANDIDATE_CHANGE":
+            write_flow_status(args, {
+                **change,
+                "package": "PACKAGE_SKIPPED_NO_CANDIDATE_CHANGE",
+                "reason": "commit a non-empty candidate change before packaging",
+            })
+        else:
+            package(args)
+            write_flow_status(args, {
+                **change,
+                "package": "PASS",
+            })
 
 
 def main() -> int:
@@ -773,12 +935,16 @@ def main() -> int:
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--assets-root", type=Path, required=True)
     parser.add_argument("--baseline-python")
+    parser.add_argument("--profile", choices=("quick", "full"), default="quick")
     parser.add_argument("--starter-ref", default=DEFAULT_STARTER_REF,
                         help="explicit immutable starter tag/commit used by benchmark binding and package")
     args = parser.parse_args()
     try:
         execute_command(args)
-        print(json.dumps({"status": "PASS", "command": args.command, "run_root": str(args.run_root.resolve()), "formal_performance": "NOT_RUN_BY_SCOPE"}))
+        print(json.dumps({"status": "PASS", "command": args.command,
+                          "profile": args.profile,
+                          "run_root": str(args.run_root.resolve()),
+                          "formal_performance": "NOT_RUN_BY_SCOPE"}))
         return 0
     except Exception as exc:
         print(json.dumps({"status": "FAIL", "command": args.command, "error_type": type(exc).__name__, "error": str(exc)}), file=sys.stderr)
