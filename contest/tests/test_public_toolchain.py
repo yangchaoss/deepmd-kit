@@ -357,7 +357,7 @@ class PublicBenchmarkTest(unittest.TestCase):
             self.assertEqual(baseline["status"], "BENCHMARK_INVALID")
             self.assertEqual(candidate["status"], "CANDIDATE_INVALID")
 
-    def test_output_contract_matches_historical_nano_evidence(self):
+    def test_output_contract_accepts_frozen_500_frame_nano_shape(self):
         contract = benchmark.load_output_contract()
         self.assertEqual(contract["measured_dimension"], "N")
         self.assertEqual(contract["atom_count"], 1024)
@@ -366,15 +366,23 @@ class PublicBenchmarkTest(unittest.TestCase):
         self.assertEqual(contract["fields"]["measured_latencies_s"]["shape"], ["N"])
         for spec in contract["fields"].values():
             self.assertEqual(spec["allowed_dtypes"], ["float64"])
-        historical = json.loads((
-            Path(__file__).parents[2].parent
-            / "dpa4c-nano-rc4-final-regression-20260915-evidence"
-            / "results/public-benchmark/Pair1/baseline.correctness.json"
-        ).read_text())
-        self.assertEqual(historical["checks"]["measured_energy_eV"]["shape"], [500])
-        self.assertEqual(historical["checks"]["measured_forces"]["shape"], [500, 1024, 3])
-        self.assertEqual(historical["checks"]["measured_virial"]["shape"], [500, 3, 3])
-        self.assertEqual(historical["checks"]["measured_stress"]["shape"], [500, 6])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reference = root / "reference.npz"
+            actual = root / "actual.npz"
+            fields = valid_output_fields(frames=500, warmup=20)
+            np.savez(reference, **fields)
+            np.savez(actual, **fields)
+            tolerance_path = Path(__file__).parents[1] / "config/benchmark-tolerance.json"
+            result = benchmark.validate_output(
+                actual, reference, root / "correctness.json", "candidate", "Pair1",
+                benchmark.load_tolerance(tolerance_path), tolerance_path,
+            )
+        self.assertEqual(result["status"], "PASS")
+        self.assertEqual(result["checks"]["measured_energy_eV"]["shape"], [500])
+        self.assertEqual(result["checks"]["measured_forces"]["shape"], [500, 1024, 3])
+        self.assertEqual(result["checks"]["measured_virial"]["shape"], [500, 3, 3])
+        self.assertEqual(result["checks"]["measured_stress"]["shape"], [500, 6])
 
     def test_output_contract_rejects_wrong_shape_dtype_fields_and_nan(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -765,12 +773,22 @@ class PublicBenchmarkTest(unittest.TestCase):
                 mock.patch.object(flow, "DEFAULT_RUNS_ROOT", root / "runs"),
                 mock.patch.dict(os.environ, {"DPA4C_OWNER": "owner/test"}, clear=False),
             ):
-                first = flow.new_run_root("quick")
-                second = flow.new_run_root("quick")
+                first = flow.new_run_root("quick", flow.DEFAULT_STARTER_REF)
+                second = flow.new_run_root("quick", flow.DEFAULT_STARTER_REF)
+                historical = flow.new_run_root(
+                    "quick", "dpa4c-ppu-nano-starter-v1.0.0-rc8"
+                )
+                commit_ref = flow.new_run_root("quick", "0123456789abcdef")
             self.assertNotEqual(first, second)
             self.assertIn("quick", first.name)
+            self.assertTrue(first.name.startswith("rc9-quick-"))
+            self.assertTrue(historical.name.startswith("rc8-quick-"))
+            self.assertTrue(commit_ref.name.startswith("commit-0123456789ab-quick-"))
             self.assertEqual(first.parent.name, "owner-test")
-            self.assertTrue(first.is_dir() and second.is_dir())
+            self.assertTrue(
+                first.is_dir() and second.is_dir()
+                and historical.is_dir() and commit_ref.is_dir()
+            )
         with self.assertRaisesRegex(RuntimeError, "requires explicit --run-root"):
             flow.execute_command(Namespace(command="build", profile="quick"))
         with self.assertRaisesRegex(RuntimeError, "requires explicit --assets-root"):
@@ -835,7 +853,10 @@ class PublicBenchmarkTest(unittest.TestCase):
 
     def test_package_rejects_quick_before_reading_run_root(self):
         args = Namespace(profile="quick")
-        with self.assertRaisesRegex(RuntimeError, "PACKAGE_SKIPPED"):
+        with self.assertRaisesRegex(
+            RuntimeError,
+            r"^PACKAGE_SKIPPED: quick profile never creates a formal submission$",
+        ):
             flow.package(args)
 
     def test_build_reuse_requires_exact_identity_and_complete_artifacts(self):
@@ -880,10 +901,10 @@ class PublicBenchmarkTest(unittest.TestCase):
         self.assertIn("missing model:", result.stderr)
         self.assertNotIn("can't open file", result.stderr)
 
-    def test_rc7_is_the_only_default_starter(self):
-        self.assertEqual(flow.DEFAULT_STARTER_REF, "dpa4c-ppu-nano-starter-v1.0.0-rc7")
+    def test_rc9_is_the_only_default_starter(self):
+        self.assertEqual(flow.DEFAULT_STARTER_REF, "dpa4c-ppu-nano-starter-v1.0.0-rc9")
         readme = (Path(__file__).parents[1] / "README.md").read_text()
-        self.assertIn("dpa4c-ppu-nano-starter-v1.0.0-rc7", readme)
+        self.assertIn("dpa4c-ppu-nano-starter-v1.0.0-rc9", readme)
 
     def test_contestant_onboarding_docs_bind_image_entrypoint_and_protocols(self):
         contest_readme = (Path(__file__).parents[1] / "README.md").read_text()
@@ -896,12 +917,20 @@ class PublicBenchmarkTest(unittest.TestCase):
         self.assertIn("2 fresh pairs", contest_readme)
         self.assertIn("20 warmup + 500 measured", contest_readme)
         self.assertIn("--run-root", contest_readme)
+        self.assertIn("package --profile full", contest_readme)
+        self.assertIn(
+            "PACKAGE_SKIPPED: quick profile never creates a formal submission",
+            contest_readme,
+        )
+        self.assertIn("development quick profile does not produce a submission", contest_readme)
         self.assertIn("contest/README.md", root_readme)
 
-    def test_runtime_image_binds_rc7_tag_and_external_provenance(self):
+    def test_runtime_image_binds_rc9_tag_and_external_provenance(self):
         dockerfile = (Path(__file__).parents[1] / "image/Dockerfile").read_text()
         runtime = json.loads((Path(__file__).parents[1] / "config/runtime.json").read_text())
-        self.assertIn("--branch dpa4c-ppu-nano-starter-v1.0.0-rc7", dockerfile)
+        self.assertIn("--branch dpa4c-ppu-nano-starter-v1.0.0-rc9", dockerfile)
+        self.assertNotIn("dpa4c-ppu-nano-starter-v1.0.0-rc7", dockerfile)
+        self.assertNotIn("dpa4c-ppu-nano-starter-v1.0.0-rc8", dockerfile)
         self.assertEqual(runtime["baseline_python"], "/opt/dpa4c-baseline-venv/bin/python")
         self.assertIn("DPA4C_BASELINE_VENV=/opt/dpa4c-baseline-venv", dockerfile)
         self.assertIn("DPA4C_BASELINE_BUILD=/opt/dpa4c-baseline-build", dockerfile)

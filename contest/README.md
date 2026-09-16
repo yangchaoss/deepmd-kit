@@ -3,7 +3,7 @@
 This file is the only authoritative contestant-facing contract for the Nano
 PPU flow. The starter repository is
 `https://github.com/yangchaoss/deepmd-kit.git`; the immutable starter ref is
-`dpa4c-ppu-nano-starter-v1.0.0-rc7`. Resolve that tag to record the exact
+`dpa4c-ppu-nano-starter-v1.0.0-rc9`. Resolve that tag to record the exact
 commit and tree used by a run. Historical files under
 `examples/ppu/dpa4c_nano_rc1/` are compatibility material only and do not
 define a second submission contract.
@@ -14,13 +14,15 @@ The published `dpa4c-ppu-nano-starter-v1.0.0-rc1`,
 and must not be used as the current starter. rc2 was superseded after final
 Runtime Image prevalidation exposed candidate dependency inheritance and
 failed the isolation gate; rc1, rc2, and rc3 remain history only.
-The preceding `dpa4c-ppu-nano-starter-v1.0.0-rc6` tag is also superseded by
-rc7 and remains historical evidence only.
+The preceding rc6 and rc7 tags also remain historical evidence only. rc8 fixed
+the contestant entrypoint symlink, but is superseded by rc9 because its active
+defaults, image recipe, and documentation still referenced rc7. The rc8 tag is
+not moved or rewritten.
 
 The organizer calls one tracked entrypoint.  Assets remain external and are
 accepted only at the frozen SHA-256 values in `config/runtime.json`.
 
-The current frozen ref is rc7. The immutable starter tag,
+The current frozen ref is rc9. The immutable starter tag,
 `DEFAULT_STARTER_REF`, and the Runtime Image are released together; do not
 treat uncommitted organizer edits as a contestant baseline.
 
@@ -33,7 +35,7 @@ branch. The organization pre-mounts the two fixed assets at
 
 ```text
 enter /opt/dpa4c-contestant-kit
-  -> detach at dpa4c-ppu-nano-starter-v1.0.0-rc7
+  -> detach at dpa4c-ppu-nano-starter-v1.0.0-rc9
   -> create candidate/<name> and commit the candidate change
   -> run the one-command quick self-test
   -> run the one-command full self-test
@@ -44,7 +46,7 @@ Create a branch for the candidate (replace `my-model` with a short name):
 
 ```bash
 cd /opt/dpa4c-contestant-kit
-git switch --detach dpa4c-ppu-nano-starter-v1.0.0-rc7
+git switch --detach dpa4c-ppu-nano-starter-v1.0.0-rc9
 git switch -c candidate/my-model
 git config user.name "Contestant"
 git config user.email "contestant@example.invalid"
@@ -58,6 +60,7 @@ and a new root is never reused automatically:
 cd /opt/dpa4c-contestant-kit
 /usr/local/bin/dpa4c-contestant-flow all --profile quick
 # 1 pair, AB order, 2 warmup + 10 measured; package is skipped
+# The G18 validation took about three minutes; elapsed time is environment-dependent.
 
 # edit the DeepMD source or contest/candidate implementation, then commit it
 git add <changed-files>
@@ -72,11 +75,24 @@ them. If a staged command is run instead of `all`, it must receive both
 `--run-root` and `--assets-root` explicitly; staged commands never allocate a
 directory implicitly:
 
+The default profile is `quick`. Staged submission preparation must therefore
+pass `--profile full` to every command, use the same run root and starter ref,
+and finish with the explicit full package command:
+
 ```bash
-/usr/local/bin/dpa4c-contestant-flow build \
-  --run-root /workspace/runs/OWNER/RUN_ID \
-  --assets-root /workspace/dpa4c-contest/assets
+RUN_ROOT=/workspace/runs/OWNER/RUN_ID
+STARTER=dpa4c-ppu-nano-starter-v1.0.0-rc9
+./contest/contest.sh build --profile full --run-root "$RUN_ROOT" --assets-root /workspace/dpa4c-contest/assets --starter-ref "$STARTER"
+./contest/contest.sh test --profile full --run-root "$RUN_ROOT" --assets-root /workspace/dpa4c-contest/assets --starter-ref "$STARTER"
+./contest/contest.sh benchmark --profile full --run-root "$RUN_ROOT" --assets-root /workspace/dpa4c-contest/assets --starter-ref "$STARTER"
+./contest/contest.sh package --profile full --run-root "$RUN_ROOT" --assets-root /workspace/dpa4c-contest/assets --starter-ref "$STARTER"
 ```
+
+Running staged `package` with the default quick profile fails with
+`PACKAGE_SKIPPED: quick profile never creates a formal submission`; it must
+not be used as a substitute for the full package gate. By contrast, `all
+--profile quick` completes its development flow and writes FLOW_STATUS reason
+`development quick profile does not produce a submission`.
 
 Quick is a development self-test with `score_type=development_quick` and
 `verified=false`. Full is the public self-test and uses the fixed Nano/1024
@@ -111,17 +127,10 @@ positive. The physics shapes are
 numeric tolerance checks; reference/baseline contract failures invalidate the
 benchmark and candidate contract failures invalidate the candidate.
 
-```bash
-./contest/contest.sh build --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets
-./contest/contest.sh test  --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets
-./contest/contest.sh benchmark --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc7
-./contest/contest.sh package --run-root /workspace/runs/OWNER/RUN_ID --assets-root /workspace/dpa4c-contest/assets --starter-ref dpa4c-ppu-nano-starter-v1.0.0-rc7
-```
-
 The default profile is `quick`: one public baseline/candidate pair with 2
 warmup and 10 measured frames. Its result is marked
 `score_type=development_quick`, `verified=false`, and
-`formal_performance=NOT_RUN`; it never creates a submission. `full` retains
+`formal_performance=NOT_RUN_BY_SCOPE`; it never creates a submission. `full` retains
 the public self-test protocol of two fresh pairs in AB/BA order with 20
 warmup and 100 measured frames. Both profiles use the same worker, timer,
 synchronization, input generation, and E/F/virial/stress checks.
@@ -195,3 +204,10 @@ The runtime image recipe is a separate, later release step. It must clone this
 public repository at the immutable starter tag during image construction; the
 candidate source, model, structure, results and private evaluator are not image
 acceptance evidence.
+
+For an organizer clean replay, checkout the starter and apply the submitted
+patch, then compare the reconstructed tree with the expected tree. A local
+replay commit may be created only to satisfy the committed-clean build gate.
+That commit, rebuilt wheel, and ELF may have different byte identities, so the
+actual loaded artifacts must be recorded and correctness rerun; prior results
+must never be rebound to the replay artifacts.

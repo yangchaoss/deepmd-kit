@@ -20,7 +20,7 @@ RUN set -eux; \
     for attempt in 1 2 3; do \
       git -c http.version=HTTP/1.1 clone \
         --depth 1 \
-        --branch dpa4c-ppu-nano-starter-v1.0.0-rc7 \
+        --branch dpa4c-ppu-nano-starter-v1.0.0-rc9 \
         --single-branch \
         https://github.com/yangchaoss/deepmd-kit.git \
         "$DPA4C_CONTESTANT_ROOT" && break; \
@@ -29,7 +29,7 @@ RUN set -eux; \
       sleep 5; \
     done; \
     test "$(git -C "$DPA4C_CONTESTANT_ROOT" remote get-url origin)" = "https://github.com/yangchaoss/deepmd-kit.git"; \
-    test "$(git -C "$DPA4C_CONTESTANT_ROOT" describe --exact-match --tags --match 'dpa4c-ppu-nano-starter-v1.0.0-rc7')" = "dpa4c-ppu-nano-starter-v1.0.0-rc7"; \
+    test "$(git -C "$DPA4C_CONTESTANT_ROOT" describe --exact-match --tags --match 'dpa4c-ppu-nano-starter-v1.0.0-rc9')" = "dpa4c-ppu-nano-starter-v1.0.0-rc9"; \
     if git -C "$DPA4C_CONTESTANT_ROOT" symbolic-ref -q HEAD >/dev/null; then \
       echo 'expected detached HEAD after immutable tag checkout' >&2; exit 1; \
     fi; \
@@ -79,11 +79,11 @@ RUN set -eux; \
       --no-deps --require-hashes --ignore-installed \
       -r "$DPA4C_CONTESTANT_ROOT/contest/config/runtime-requirements.txt"; \
     test -z "$(git -C "$DPA4C_CONTESTANT_ROOT" status --porcelain)"; \
-    env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$baseline_python" -c 'import hashlib,json,subprocess,sys; from pathlib import Path; import deepmd; import deepmd.lib; from deepmd.calculator import DP; prefix=Path(sys.prefix).resolve(); source=Path("/opt/dpa4c-contestant-kit").resolve(); wheel=Path("'"$baseline_wheel"'").resolve(); d=Path(deepmd.__file__).resolve(); l=Path(deepmd.lib.__file__).resolve(); assert d.is_relative_to(prefix) and l.is_relative_to(prefix); assert not d.is_relative_to(source) and not l.is_relative_to(source); elfs=[{"path":str(p.resolve()),"sha256":hashlib.file_digest(p.open("rb"),"sha256").hexdigest(),"size_bytes":p.stat().st_size} for p in sorted(l.parent.rglob("*.so"))]; assert elfs,"baseline deepmd.lib contains no shared objects"; result={"status":"PASS","python":str(Path(sys.executable).resolve()),"prefix":str(prefix),"deepmd":str(d),"deepmd_lib":str(l),"deepmd_elfs":elfs,"baseline_wheel":{"path":str(wheel),"sha256":hashlib.file_digest(wheel.open("rb"),"sha256").hexdigest(),"size_bytes":wheel.stat().st_size},"starter":{"repository":"https://github.com/yangchaoss/deepmd-kit.git","tag":"dpa4c-ppu-nano-starter-v1.0.0-rc7","commit":subprocess.check_output(["git","-C",str(source),"rev-parse","HEAD"],text=True).strip(),"tree":subprocess.check_output(["git","-C",str(source),"rev-parse","HEAD^{tree}"],text=True).strip()},"sys_path":sys.path}; Path("/opt/dpa4c-baseline-identity.json").write_text(json.dumps(result,indent=2)+"\n"); print(json.dumps(result,indent=2))'
+    env -u PYTHONPATH -u PYTHONHOME PYTHONNOUSERSITE=1 "$baseline_python" -c 'import hashlib,json,subprocess,sys; from pathlib import Path; import deepmd; import deepmd.lib; from deepmd.calculator import DP; prefix=Path(sys.prefix).resolve(); source=Path("/opt/dpa4c-contestant-kit").resolve(); wheel=Path("'"$baseline_wheel"'").resolve(); d=Path(deepmd.__file__).resolve(); l=Path(deepmd.lib.__file__).resolve(); assert d.is_relative_to(prefix) and l.is_relative_to(prefix); assert not d.is_relative_to(source) and not l.is_relative_to(source); elfs=[{"path":str(p.resolve()),"sha256":hashlib.file_digest(p.open("rb"),"sha256").hexdigest(),"size_bytes":p.stat().st_size} for p in sorted(l.parent.rglob("*.so"))]; assert elfs,"baseline deepmd.lib contains no shared objects"; result={"status":"PASS","python":str(Path(sys.executable).resolve()),"prefix":str(prefix),"deepmd":str(d),"deepmd_lib":str(l),"deepmd_elfs":elfs,"baseline_wheel":{"path":str(wheel),"sha256":hashlib.file_digest(wheel.open("rb"),"sha256").hexdigest(),"size_bytes":wheel.stat().st_size},"starter":{"repository":"https://github.com/yangchaoss/deepmd-kit.git","tag":"dpa4c-ppu-nano-starter-v1.0.0-rc9","commit":subprocess.check_output(["git","-C",str(source),"rev-parse","HEAD"],text=True).strip(),"tree":subprocess.check_output(["git","-C",str(source),"rev-parse","HEAD^{tree}"],text=True).strip()},"sys_path":sys.path}; Path("/opt/dpa4c-baseline-identity.json").write_text(json.dumps(result,indent=2)+"\n"); print(json.dumps(result,indent=2))'
 
 LABEL org.opencontainers.image.source="https://github.com/yangchaoss/deepmd-kit" \
-      org.opencontainers.image.version="dpa4c-ppu-nano-starter-v1.0.0-rc7" \
-      com.dptech.dpa4c.source-tag="dpa4c-ppu-nano-starter-v1.0.0-rc7" \
+      org.opencontainers.image.version="dpa4c-ppu-nano-starter-v1.0.0-rc9" \
+      com.dptech.dpa4c.source-tag="dpa4c-ppu-nano-starter-v1.0.0-rc9" \
       com.dptech.dpa4c.source-provenance="resolved-head-tree-in-build-log-and-release-manifest" \
       com.dptech.dpa4c.runtime-base="registry.dp.tech/dptech/dp/native/prod-27666/4553069/dpa4c-nano-rc1-runtime-probe:20260911-yangchao-r1@sha256:f475eb7a0488b8785818b506fc17e9c411b7ef526fdae2d974c62a5c42937061" \
       com.dptech.dpa4c.runtime-contract="ppu-sdk-2.1_cuda-13.0_torch-2.9.0" \

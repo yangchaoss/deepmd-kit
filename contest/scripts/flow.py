@@ -34,7 +34,7 @@ WHEELHOUSE_ENV = "DPA4C_CONTEST_WHEELHOUSE"
 CANDIDATE_MANIFEST = CONTEST / "config" / "submission.json"
 FROZEN_TORCH_VERSION = "2.9.0+ali.10.ppu2.1.0.cu130"
 FROZEN_TORCH_ROOT = Path("/opt/ac2")
-DEFAULT_STARTER_REF = "dpa4c-ppu-nano-starter-v1.0.0-rc7"
+DEFAULT_STARTER_REF = "dpa4c-ppu-nano-starter-v1.0.0-rc9"
 BENCHMARK_WORKER = CONTEST / "scripts" / "public_route_worker.py"
 BENCHMARK_RUNNER = CONTEST / "scripts" / "public_benchmark.py"
 BINARY_IMPLEMENTATION_SUFFIXES = {".so", ".o", ".a", ".whl"}
@@ -246,13 +246,26 @@ def _safe_owner() -> str:
     return owner or "owner"
 
 
-def new_run_root(profile: str) -> Path:
+def starter_ref_run_label(starter_ref: str) -> str:
+    """Return a stable, filesystem-safe label for an immutable starter ref."""
+    ref = starter_ref.strip()
+    rc_match = re.search(r"(?:^|[-_/])rc(?P<version>[0-9]+)$", ref, re.IGNORECASE)
+    if rc_match:
+        return f"rc{rc_match.group('version')}"
+    if re.fullmatch(r"[0-9a-fA-F]{7,64}", ref):
+        return f"commit-{ref[:12].lower()}"
+    digest = hashlib.sha256(ref.encode()).hexdigest()[:12]
+    return f"ref-{digest}"
+
+
+def new_run_root(profile: str, starter_ref: str) -> Path:
     """Create one unique, profile-labelled run root outside the checkout."""
     owner_root = DEFAULT_RUNS_ROOT / _safe_owner()
     owner_root.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     for _ in range(32):
-        candidate = owner_root / f"rc7-{profile}-{stamp}-{uuid.uuid4().hex[:10]}"
+        label = starter_ref_run_label(starter_ref)
+        candidate = owner_root / f"{label}-{profile}-{stamp}-{uuid.uuid4().hex[:10]}"
         try:
             candidate.mkdir()
         except FileExistsError:
@@ -263,7 +276,7 @@ def new_run_root(profile: str) -> Path:
 
 def prepare_all_args(args) -> None:
     if getattr(args, "run_root", None) is None:
-        args.run_root = new_run_root(args.profile)
+        args.run_root = new_run_root(args.profile, args.starter_ref)
     if getattr(args, "assets_root", None) is None:
         args.assets_root = DEFAULT_ASSETS_ROOT
 
