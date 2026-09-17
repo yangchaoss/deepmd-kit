@@ -8,7 +8,12 @@ from __future__ import annotations
 from ase.calculators.calculator import all_changes
 
 
+SIMULATION_IMPLEMENTATION_ID = "contestant-simulation-20260917"
+
+
 class DeepMDCandidateSession:
+    implementation_id = SIMULATION_IMPLEMENTATION_ID
+
     def __init__(self, model: str) -> None:
         from deepmd.calculator import DP
 
