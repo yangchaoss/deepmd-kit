@@ -12,7 +12,7 @@ class DeepMDCandidateSession:
     def __init__(self, model: str) -> None:
         from deepmd.calculator import DP
 
-        self._calculator = DP(model=model, nlist_backend="auto")
+        self._calculator = DP(model=model, nlist_backend="auto", neighbor_graph_method="ase")
 
     def evaluate(self, atoms) -> dict[str, object]:
         self._calculator.calculate(
