@@ -44,7 +44,15 @@ def get_argument_from_env() -> tuple[str, list, list, dict, str, str]:
     cmake_args = []
     extra_scripts = {}
     # get variant option from the environment variables, available: cpu, cuda, rocm
-    dp_variant = os.environ.get("DP_VARIANT", "cpu").lower()
+    dp_variant = os.environ.get("DP_VARIANT")
+    if dp_variant is None:
+        try:
+            import torch
+
+            dp_variant = "cuda" if torch.cuda.is_available() else "cpu"
+        except Exception:
+            dp_variant = "cpu"
+    dp_variant = dp_variant.lower()
     if dp_variant == "cpu" or dp_variant == "":
         cmake_minimum_required_version = "3.25.2"
     elif dp_variant == "cuda":

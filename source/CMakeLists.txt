@@ -399,7 +399,10 @@ if(ENABLE_PYTORCH AND NOT DEEPMD_C_ROOT)
   # headers and link libtorch_cuda, so they can be compiled only against a
   # CUDA-enabled PyTorch: a CPU-only wheel ships the ATen/c10 CUDA headers but
   # neither the generated c10/cuda/impl/cuda_cmake_macros.h nor libtorch_cuda.
-  if(TORCH_CUDA_LIBRARIES)
+  # PPU Torch ships libtorch_cuda.so but its TorchConfig can leave the
+  # conventional TORCH_CUDA_LIBRARIES variable empty.
+  if(TORCH_CUDA_LIBRARIES OR
+     EXISTS "${TORCH_INSTALL_PREFIX}/lib/libtorch_cuda.so")
     set(DEEPMD_TORCH_HAS_CUDA TRUE)
   else()
     set(DEEPMD_TORCH_HAS_CUDA FALSE)

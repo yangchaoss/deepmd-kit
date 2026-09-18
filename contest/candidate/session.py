@@ -5,6 +5,10 @@ the implementation object used for one evaluation.
 """
 from __future__ import annotations
 
+import os
+os.environ.setdefault("DP_CUDA_INFER", "2")
+
+
 from ase.calculators.calculator import all_changes
 
 
