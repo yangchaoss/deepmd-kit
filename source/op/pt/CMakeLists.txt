@@ -25,9 +25,16 @@ if(USE_CUDA_TOOLKIT AND DEEPMD_TORCH_HAS_CUDA)
     endif()
   endif()
   enable_language(CUDA)
+  set(DPA1_GRAPH_COMPRESS_KERNEL_SRC
+      dpa1_graph_compress_c8.cu dpa1_graph_compress_c16.cu
+      dpa1_graph_compress_c32.cu dpa1_graph_compress_c64.cu
+      dpa1_graph_compress_c128.cu dpa1_graph_compress_c256.cu)
   list(
     APPEND
     OP_SRC
+    dpa1_graph_descriptor.cu
+    dpa1_graph_compress.cu
+    ${DPA1_GRAPH_COMPRESS_KERNEL_SRC}
     dpa4c_graph_compress.cu
     dpa4c_graph_compress_c8.cu
     dpa4c_graph_compress_c16.cu
@@ -36,7 +43,7 @@ if(USE_CUDA_TOOLKIT AND DEEPMD_TORCH_HAS_CUDA)
     dpa4c_graph_compress_c128.cu
     graph_fitting.cu
     edge_force_virial.cu
-  )
+    dpa1_graph_energy_force.cu)
 endif()
 
 add_library(deepmd_op_pt MODULE ${OP_SRC})
@@ -63,10 +70,15 @@ if(USE_CUDA_TOOLKIT AND DEEPMD_TORCH_HAS_CUDA)
   # libtorch headers require C++17; the CUDA sources must match.
   set_target_properties(deepmd_op_pt PROPERTIES CUDA_STANDARD 17
                                                 CUDA_STANDARD_REQUIRED ON)
-  # Instantiate the DPA4C kernels one translation unit per channel width so
-  # their angular-degree and topology specializations compile in parallel.
+  if(DEEPMD_ENABLE_DPA1_HIGH_LMAX)
+    target_compile_definitions(deepmd_op_pt
+                               PRIVATE DEEPMD_ENABLE_DPA1_HIGH_LMAX=1)
+  endif()
+  # The compressed DPA1 and DPA4C kernels are instantiated one translation unit
+  # per channel width so their angular-degree and topology specializations
+  # compile in parallel.
   set_source_files_properties(
-    dpa4c_graph_compress_c8.cu
+    ${DPA1_GRAPH_COMPRESS_KERNEL_SRC} dpa4c_graph_compress_c8.cu
     dpa4c_graph_compress_c16.cu dpa4c_graph_compress_c32.cu
     dpa4c_graph_compress_c64.cu dpa4c_graph_compress_c128.cu
     PROPERTIES COMPILE_OPTIONS "--use_fast_math")
