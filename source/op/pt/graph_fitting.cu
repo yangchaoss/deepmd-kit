@@ -72,8 +72,25 @@ void gemm_nn(cudaStream_t stream,
              float beta = 0.f) {
   cublasSetStream(cublas_handle(), stream);
   const float alpha = 1.f;
-  cublasSgemm(cublas_handle(), CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, &alpha, b, n,
-              a, k, &beta, c, n);
+  cublasGemmEx(cublas_handle(),
+               CUBLAS_OP_N,
+               CUBLAS_OP_N,
+               n,
+               m,
+               k,
+               &alpha,
+               b,
+               CUDA_R_32F,
+               n,
+               a,
+               CUDA_R_32F,
+               k,
+               &beta,
+               c,
+               CUDA_R_32F,
+               n,
+               CUBLAS_COMPUTE_32F_PEDANTIC,
+               CUBLAS_GEMM_DEFAULT);
 }
 
 // Row-major C(m, n) = A(m, k) @ B(n, k)^T + beta * C.
@@ -87,8 +104,25 @@ void gemm_nt(cudaStream_t stream,
              float beta = 0.f) {
   cublasSetStream(cublas_handle(), stream);
   const float alpha = 1.f;
-  cublasSgemm(cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N, n, m, k, &alpha, b, k,
-              a, k, &beta, c, n);
+  cublasGemmEx(cublas_handle(),
+               CUBLAS_OP_T,
+               CUBLAS_OP_N,
+               n,
+               m,
+               k,
+               &alpha,
+               b,
+               CUDA_R_32F,
+               k,
+               a,
+               CUDA_R_32F,
+               k,
+               &beta,
+               c,
+               CUDA_R_32F,
+               n,
+               CUBLAS_COMPUTE_32F_PEDANTIC,
+               CUBLAS_GEMM_DEFAULT);
 }
 
 // sigma(z) = (1 + tanh(z/2)) / 2. The identity is not the detour it looks

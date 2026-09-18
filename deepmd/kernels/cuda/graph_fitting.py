@@ -90,6 +90,12 @@ def op_available() -> bool:
     )
 
 
+def _ppu_fused_fitting_enabled() -> bool:
+    """Whether the experimental PPU fused fitting path is enabled."""
+    value = os.environ.get("DP_PPU_FUSED_FITTING", "disabled")
+    return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
 def fitting_eligible(fit: Any) -> bool:
     """Whether the fused fitting operator can serve this network.
 
@@ -117,7 +123,11 @@ def fitting_eligible(fit: Any) -> bool:
     bool
         ``True`` when the fused operator reproduces the reference forward.
     """
-    if torch.cuda.is_available() and torch.cuda.get_device_name(0).startswith("PPU"):
+    if (
+        torch.cuda.is_available()
+        and torch.cuda.get_device_name(0).startswith("PPU")
+        and not _ppu_fused_fitting_enabled()
+    ):
         return False
 
     if fit.numb_fparam or fit.numb_aparam or fit.dim_case_embd:
