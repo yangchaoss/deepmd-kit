@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 os.environ.setdefault("DP_CUDA_INFER", "2")
-os.environ.setdefault("DP_PPU_FUSED_FITTING", "disabled")
+os.environ.setdefault("DP_PPU_FUSED_FITTING", "enabled")
 
 
 from ase.calculators.calculator import all_changes
