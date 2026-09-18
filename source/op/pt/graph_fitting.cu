@@ -99,7 +99,7 @@ void gemm_nt(cudaStream_t stream,
 // only faster form is fully approximate, worth 0.5% of the fitting forward
 // against an approximate division and exponential.
 __device__ __forceinline__ float sigmoid(float z) {
-  return 1.f / (1.f + expf(-z));
+  return 0.5f * (1.f + tanhf(0.5f * z));
 }
 
 // Activation codes follow deepmd.kernels.triton.dpa1.activation.ACT_CODES

@@ -117,6 +117,9 @@ def fitting_eligible(fit: Any) -> bool:
     bool
         ``True`` when the fused operator reproduces the reference forward.
     """
+    if torch.cuda.is_available() and torch.cuda.get_device_name(0).startswith("PPU"):
+        return False
+
     if fit.numb_fparam or fit.numb_aparam or fit.dim_case_embd:
         return False
     if getattr(fit, "exclude_types", None):
