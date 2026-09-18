@@ -36,8 +36,8 @@ if(USE_CUDA_TOOLKIT AND DEEPMD_TORCH_HAS_CUDA)
     dpa4c_graph_compress_c128.cu
     graph_fitting.cu
     edge_force_virial.cu
-endif()
   )
+endif()
 
 add_library(deepmd_op_pt MODULE ${OP_SRC})
 # link: libdeepmd libtorch
