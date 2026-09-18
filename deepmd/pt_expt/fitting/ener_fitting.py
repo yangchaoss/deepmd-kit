@@ -59,6 +59,7 @@ class EnergyFittingNet(EnergyFittingNetDP):
             and cuda_infer_level() >= 1
             and cuda_fitting_available()
             and fitting_eligible(self)
+            and descriptor.dtype == torch.float32
         ):
             return graph_fitting(self, descriptor, atype)
         return EnergyFittingNetDP.call_graph(
