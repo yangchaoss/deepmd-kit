@@ -404,7 +404,13 @@ void backward_scan(const Arguments& arguments,
           }
         }
       }
-      for (int channel = 0; channel < angular_pad; channel += kWays) {
+      // Padded angular cotangents are zero; avoid projecting their channels.
+      // Preserve the existing padded path when a four-way group is incomplete.
+      const int projection_channels =
+          layout.degree_channels[1] % kWays == 0
+              ? layout.degree_channels[1]
+              : angular_pad;
+      for (int channel = 0; channel < projection_channels; channel += kWays) {
         for (int way = 0; way < kWays; ++way) {
           const float weight = amplitude[channel + way];
           const float* __restrict line =
