@@ -12,7 +12,8 @@
 // activation and residual collapse into one pass over the layer output
 // instead of three aten kernels each writing a node-scale tensor -- and the
 // saved state, which is the pre-activation the GEMM already wrote, so the
-// backward re-derives the activation derivative rather than storing it.
+// public backward re-derives the activation derivative. The fused CPU entry
+// may instead cache SiLU's derivative in its private saved buffer.
 
 #include <ATen/Parallel.h>
 #include <torch/torch.h>
@@ -60,9 +61,27 @@ inline float activation_state(float biased, float value) {
   return Act == kTanh ? value : biased;
 }
 
+/// Cache only inside the fused entry; public saved-state semantics stay intact.
+template <int64_t Act, bool CacheSiluDerivative>
+inline float activation_with_state(float biased, float& state) {
+  if constexpr (CacheSiluDerivative && Act == kSilu) {
+    const float s = deepmd::fast_sigmoid(biased);
+    const float value = biased * s;
+    state = s * (1.0f + biased * (1.0f - s));
+    return value;
+  } else {
+    const float value = activation<Act>(biased);
+    state = activation_state<Act>(biased, value);
+    return value;
+  }
+}
+
 /// Activation derivative, from the state the forward stored.
-template <int64_t Act>
+template <int64_t Act, bool CacheSiluDerivative = false>
 inline float derivative_from_state(float state) {
+  if constexpr (CacheSiluDerivative && Act == kSilu) {
+    return state;
+  }
   if (Act == kTanh) {
     return 1.0f - state * state;
   }
@@ -74,7 +93,7 @@ inline float derivative_from_state(float state) {
 ///
 /// The pre-activation buffer is overwritten in place with the state the
 /// backward needs, so the layer costs one pass whatever that state is.
-template <int64_t Act>
+template <int64_t Act, bool CacheSiluDerivative = false>
 void layer_epilogue(int64_t nodes,
                     int64_t width,
                     float* DEEPMD_RESTRICT pre,
@@ -89,15 +108,15 @@ void layer_epilogue(int64_t nodes,
         const float* DEEPMD_RESTRICT skip = residual + node * width;
         for (int64_t channel = 0; channel < width; ++channel) {
           const float biased = row[channel] + bias[channel];
-          const float value = activation<Act>(biased);
-          row[channel] = activation_state<Act>(biased, value);
+          const float value =
+              activation_with_state<Act, CacheSiluDerivative>(biased, row[channel]);
           target[channel] = value + skip[channel];
         }
       } else {
         for (int64_t channel = 0; channel < width; ++channel) {
           const float biased = row[channel] + bias[channel];
-          const float value = activation<Act>(biased);
-          row[channel] = activation_state<Act>(biased, value);
+          const float value =
+              activation_with_state<Act, CacheSiluDerivative>(biased, row[channel]);
           target[channel] = value;
         }
       }
@@ -132,7 +151,7 @@ void head(int64_t nodes,
 /// The last layer's output cotangent is the outer product of the per-node
 /// energy cotangent with the head weight, which is cheaper to form here than
 /// to materialize as a tensor.
-template <int64_t Act>
+template <int64_t Act, bool CacheSiluDerivative = false>
 void seed_epilogue(int64_t nodes,
                    int64_t width,
                    const double* DEEPMD_RESTRICT energy_cotangent,
@@ -150,12 +169,13 @@ void seed_epilogue(int64_t nodes,
         for (int64_t channel = 0; channel < width; ++channel) {
           const float upstream = seed * head_weight[channel];
           skip[channel] = upstream;
-          target[channel] = upstream * derivative_from_state<Act>(row[channel]);
+          target[channel] =
+              upstream * derivative_from_state<Act, CacheSiluDerivative>(row[channel]);
         }
       } else {
         for (int64_t channel = 0; channel < width; ++channel) {
           target[channel] = seed * head_weight[channel] *
-                            derivative_from_state<Act>(row[channel]);
+                            derivative_from_state<Act, CacheSiluDerivative>(row[channel]);
         }
       }
     }
@@ -163,7 +183,7 @@ void seed_epilogue(int64_t nodes,
 }
 
 /// Convert an output cotangent into a pre-activation cotangent in place.
-template <int64_t Act>
+template <int64_t Act, bool CacheSiluDerivative = false>
 void backward_epilogue(int64_t nodes,
                        int64_t width,
                        const float* DEEPMD_RESTRICT state,
@@ -180,7 +200,8 @@ void backward_epilogue(int64_t nodes,
         }
       }
       for (int64_t channel = 0; channel < width; ++channel) {
-        target[channel] *= derivative_from_state<Act>(row[channel]);
+        target[channel] *=
+            derivative_from_state<Act, CacheSiluDerivative>(row[channel]);
       }
     }
   });
@@ -205,6 +226,7 @@ torch::Tensor as_matrix(float* data,
 }
 
 /// Evaluate every layer of one node range and its per-atom energy.
+template <bool CacheSiluDerivative = false>
 void fitting_forward_range(const FittingLayerPlan& plan,
                            const float* input,
                            int64_t input_width,
@@ -235,7 +257,7 @@ void fitting_forward_range(const FittingLayerPlan& plan,
                   ws[layer]);
     const bool residual = resnets[layer] && width_out == width_in;
     dispatch_activation(act, [&](auto tag) {
-      layer_epilogue<decltype(tag)::value>(
+      layer_epilogue<decltype(tag)::value, CacheSiluDerivative>(
           nodes, width_out, pre,
           bs[layer].numel() ? bs[layer].const_data_ptr<float>() : nullptr,
           residual ? current : nullptr, out);
@@ -249,6 +271,7 @@ void fitting_forward_range(const FittingLayerPlan& plan,
 }
 
 /// Propagate the head cotangent of one node range back to the input.
+template <bool CacheSiluDerivative = false>
 void fitting_backward_range(const FittingLayerPlan& plan,
                             const double* energy_cotangent,
                             const float* saved,
@@ -271,11 +294,11 @@ void fitting_backward_range(const FittingLayerPlan& plan,
     dispatch_activation(act, [&](auto tag) {
       constexpr int64_t kAct = decltype(tag)::value;
       if (layer == plan.n_layer - 1) {
-        seed_epilogue<kAct>(nodes, width_out, energy_cotangent,
+        seed_epilogue<kAct, CacheSiluDerivative>(nodes, width_out, energy_cotangent,
                             w_head.const_data_ptr<float>(), state, cotangent,
                             residual ? out : nullptr);
       } else {
-        backward_epilogue<kAct>(nodes, width_out, state, cotangent,
+        backward_epilogue<kAct, CacheSiluDerivative>(nodes, width_out, state, cotangent,
                                 residual ? out : nullptr);
       }
     });
@@ -435,12 +458,14 @@ torch::Tensor graph_fitting_energy_gradient(torch::Tensor x,
   float* descriptor = x.data_ptr<float>();
   for (int64_t begin = 0; begin < nodes; begin += run) {
     const int64_t count = std::min(run, nodes - begin);
-    fitting_forward_range(plan, descriptor + begin * width, width,
+    // The saved buffer never escapes this fused call; public operators use
+    // the default (uncached) state contract.
+    fitting_forward_range<true>(plan, descriptor + begin * width, width,
                           atype.const_data_ptr<int64_t>() + begin, ws, bs,
                           resnets, w_head, b_head, bias_atom_e, act, count,
                           saved.data_ptr<float>(), slot,
                           energy.data_ptr<double>() + begin);
-    fitting_backward_range(
+    fitting_backward_range<true>(
         plan, seed_contiguous.const_data_ptr<double>() + begin,
         saved.const_data_ptr<float>(), ws, resnets, w_head, act, count,
         cotangent.data_ptr<float>(),
