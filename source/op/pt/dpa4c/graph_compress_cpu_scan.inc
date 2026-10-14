@@ -260,7 +260,10 @@ void backward_scan(const Arguments& arguments,
   const int angular_pad =
       ((layout.degree_channels[1] + kBlock - 1) / kBlock) * kBlock;
   const int slots = angular_components(LMAX);
-  const int slot_pad = ((slots + kBlock - 1) / kBlock) * kBlock;
+  // LMAX=2 has eight projection slots, even on the 16-lane scan path.
+  constexpr int kProjectionBlock = (LMAX == 2 && kBlock == 16) ? 8 : kBlock;
+  const int slot_pad =
+      ((slots + kProjectionBlock - 1) / kProjectionBlock) * kProjectionBlock;
   ScanWorkspace work(layout, angular_pad, slot_pad);
   std::vector<float> calibrated(layout.output_width, 0.0f);
   float basis[angular_components(kMaxDegree)];
@@ -398,8 +401,8 @@ void backward_scan(const Arguments& arguments,
       }
 
       for (int way = 0; way < kWays; ++way) {
-        for (int base = 0; base < slot_pad; base += kBlock) {
-          for (int lane = 0; lane < kBlock; ++lane) {
+        for (int base = 0; base < slot_pad; base += kProjectionBlock) {
+          for (int lane = 0; lane < kProjectionBlock; ++lane) {
             partial[way][base + lane] = 0.0f;
           }
         }
@@ -415,15 +418,15 @@ void backward_scan(const Arguments& arguments,
           const float weight = amplitude[channel + way];
           const float* __restrict line =
               work.transposed + (channel + way) * slot_pad;
-          for (int base = 0; base < slot_pad; base += kBlock) {
-            for (int lane = 0; lane < kBlock; ++lane) {
+          for (int base = 0; base < slot_pad; base += kProjectionBlock) {
+            for (int lane = 0; lane < kProjectionBlock; ++lane) {
               partial[way][base + lane] += weight * line[base + lane];
             }
           }
         }
       }
-      for (int base = 0; base < slot_pad; base += kBlock) {
-        for (int lane = 0; lane < kBlock; ++lane) {
+      for (int base = 0; base < slot_pad; base += kProjectionBlock) {
+        for (int lane = 0; lane < kProjectionBlock; ++lane) {
           projection[base + lane] =
               (partial[0][base + lane] + partial[1][base + lane]) +
               (partial[2][base + lane] + partial[3][base + lane]);
