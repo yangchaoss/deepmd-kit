@@ -27,6 +27,10 @@
 #include "activation.h"
 #include "dispatch.h"
 
+#if defined(__GNUC__) && !defined(__clang__) && defined(__x86_64__)
+#include <immintrin.h>
+#endif
+
 namespace {
 
 /// Activation codes shared with the Triton and CUDA paths.
@@ -89,6 +93,63 @@ inline float derivative_from_state(float state) {
   return s * (1.0f + state * (1.0f - s));
 }
 
+// BEGIN private cached SiLU AVX-512 helper.
+#if defined(__GNUC__) && !defined(__clang__) && defined(__x86_64__)
+inline bool cached_silu_avx512_eligible(int64_t width) {
+  return width > 0 && width % 16 == 0 &&
+         deepmd_cpu::host_isa() == deepmd_cpu::Isa::kAvx512;
+}
+
+// The generic epilogue has no FMA target. Preserve its separate FP32 operations
+// here rather than contracting the polynomial, activation or saved derivative.
+__attribute__((target("avx512f,avx512dq,avx512bw,avx512vl"),
+               optimize("fp-contract=off"), noinline))
+void cached_silu_row_avx512(int64_t width,
+                            float* DEEPMD_RESTRICT pre,
+                            const float* DEEPMD_RESTRICT bias,
+                            const float* DEEPMD_RESTRICT residual,
+                            float* DEEPMD_RESTRICT out) {
+  const __m512 one = _mm512_set1_ps(1.0f);
+  for (int64_t channel = 0; channel < width; channel += 16) {
+    const __m512 biased = _mm512_add_ps(_mm512_loadu_ps(pre + channel),
+                                       _mm512_loadu_ps(bias + channel));
+    // Flip the sign bit, including signed zero and NaN, just as unary - does.
+    const __m512 x = _mm512_castsi512_ps(_mm512_xor_si512(
+        _mm512_castps_si512(biased), _mm512_set1_epi32(-2147483647 - 1)));
+    // With these finite second operands, MAX/MIN reproduce fmaxf/fminf's
+    // quiet-NaN choice and the original [-kRange,kRange] clamp.
+    const __m512 clamped = _mm512_min_ps(
+        _mm512_max_ps(x, _mm512_set1_ps(-88.3762626647950F)),
+        _mm512_set1_ps(88.3762626647950F));
+    const __m512 scaled = _mm512_roundscale_ps(_mm512_add_ps(
+        _mm512_mul_ps(clamped, _mm512_set1_ps(1.44269504088896341F)),
+        _mm512_set1_ps(0.5F)), _MM_FROUND_TO_NEG_INF | _MM_FROUND_NO_EXC);
+    const __m512 remainder = _mm512_sub_ps(_mm512_sub_ps(clamped,
+        _mm512_mul_ps(scaled, _mm512_set1_ps(0.693145751953125F))),
+        _mm512_mul_ps(scaled, _mm512_set1_ps(1.428606765330187e-06F)));
+    const __m512 square = _mm512_mul_ps(remainder, remainder);
+    __m512 series = _mm512_set1_ps(1.9875691500e-4F);
+    series = _mm512_add_ps(_mm512_mul_ps(series, remainder), _mm512_set1_ps(1.3981999507e-3F));
+    series = _mm512_add_ps(_mm512_mul_ps(series, remainder), _mm512_set1_ps(8.3334519073e-3F));
+    series = _mm512_add_ps(_mm512_mul_ps(series, remainder), _mm512_set1_ps(4.1665795894e-2F));
+    series = _mm512_add_ps(_mm512_mul_ps(series, remainder), _mm512_set1_ps(1.6666665459e-1F));
+    series = _mm512_add_ps(_mm512_mul_ps(series, remainder), _mm512_set1_ps(5.0000001201e-1F));
+    const __m512 polynomial = _mm512_add_ps(_mm512_add_ps(one, remainder),
+                                            _mm512_mul_ps(square, series));
+    const __m512 factor = _mm512_castsi512_ps(_mm512_slli_epi32(
+        _mm512_add_epi32(_mm512_cvttps_epi32(scaled), _mm512_set1_epi32(127)), 23));
+    const __m512 s = _mm512_div_ps(one, _mm512_add_ps(one, _mm512_mul_ps(polynomial, factor)));
+    const __m512 value = _mm512_mul_ps(biased, s);
+    const __m512 derivative = _mm512_mul_ps(s, _mm512_add_ps(one,
+        _mm512_mul_ps(biased, _mm512_sub_ps(one, s))));
+    _mm512_storeu_ps(pre + channel, derivative);
+    _mm512_storeu_ps(out + channel, residual == nullptr ? value :
+        _mm512_add_ps(value, _mm512_loadu_ps(residual + channel)));
+  }
+}
+#endif
+// END private cached SiLU AVX-512 helper.
+
 /// Bias, activation and optional identity residual of one layer.
 ///
 /// The pre-activation buffer is overwritten in place with the state the
@@ -101,6 +162,18 @@ void layer_epilogue(int64_t nodes,
                     const float* DEEPMD_RESTRICT residual,
                     float* DEEPMD_RESTRICT out) {
   at::parallel_for(0, nodes, kEpilogueGrain, [&](int64_t begin, int64_t end) {
+#if defined(__GNUC__) && !defined(__clang__) && defined(__x86_64__)
+    if constexpr (CacheSiluDerivative && Act == kSilu) {
+      if (cached_silu_avx512_eligible(width)) {
+        for (int64_t node = begin; node < end; ++node) {
+          cached_silu_row_avx512(width, pre + node * width, bias,
+                                residual == nullptr ? nullptr : residual + node * width,
+                                out + node * width);
+        }
+        return;
+      }
+    }
+#endif
     for (int64_t node = begin; node < end; ++node) {
       float* DEEPMD_RESTRICT row = pre + node * width;
       float* DEEPMD_RESTRICT target = out + node * width;
