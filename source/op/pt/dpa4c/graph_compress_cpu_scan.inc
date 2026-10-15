@@ -469,7 +469,10 @@ void backward_scan(const Arguments& arguments,
           const float value =
               (angular_block ? chi_squared * combined[channel] : 0.0f) +
               chi * scalar[channel];
-          amplitude_cotangent[channel] = value;
+          // The AVX-512 L2 no-mode path never reads this scratch buffer.
+          if constexpr (HAS_MODES || LMAX != 2 || kBlock != 16) {
+            amplitude_cotangent[channel] = value;
+          }
           envelope_lanes[lane] += scalar[channel] * amplitude[channel];
           radial_lanes[lane] += value * film[channel] * slope[channel];
         }
