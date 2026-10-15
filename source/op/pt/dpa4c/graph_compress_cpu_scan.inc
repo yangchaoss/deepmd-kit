@@ -162,8 +162,15 @@ void forward_scan(const Arguments& arguments,
   const int slots = angular_components(LMAX);
   ScanWorkspace work(layout, angular_pad, kBlock);
   float basis[angular_components(kMaxDegree)];
+#if DPA4C_CPU_BLOCK == 16
+  const bool packed_angular = LMAX == 2 && !HAS_MODES && layout.channels == 64 &&
+      layout.degree_channels[1] == 8 && layout.degree_channels[2] == 4;
+#endif
 
   for (int64_t node = node_begin; node < node_end; ++node) {
+#if DPA4C_CPU_BLOCK == 16
+    ForwardAngularPacked44 angular_packed;
+#endif
     std::fill(work.scalar, work.scalar + padded, 0.0f);
     std::fill(work.angular, work.angular + slots * angular_pad, 0.0f);
     float scalar_mass = 0.0f;
@@ -208,18 +215,30 @@ void forward_scan(const Arguments& arguments,
         }
         harmonics<LMAX>(geometry.direction[0], geometry.direction[1],
                         geometry.direction[2], basis);
-        for (int slot = 0; slot < slots; ++slot) {
-          const float weight = chi_squared * basis[slot];
-          float* __restrict target = work.angular + slot * angular_pad;
-          for (int base = 0; base < angular_pad; base += kBlock) {
-            for (int lane = 0; lane < kBlock; ++lane) {
-              target[base + lane] += weight * amplitude[base + lane];
+#if DPA4C_CPU_BLOCK == 16
+        if (packed_angular) {
+          angular_packed.update(amplitude, chi_squared, basis);
+        } else
+#endif
+        {
+          for (int slot = 0; slot < slots; ++slot) {
+            const float weight = chi_squared * basis[slot];
+            float* __restrict target = work.angular + slot * angular_pad;
+            for (int base = 0; base < angular_pad; base += kBlock) {
+              for (int lane = 0; lane < kBlock; ++lane) {
+                target[base + lane] += weight * amplitude[base + lane];
+              }
             }
           }
         }
       }
     }
 
+#if DPA4C_CPU_BLOCK == 16
+    if (packed_angular) {
+      angular_packed.store(work.angular);
+    }
+#endif
     const float scalar_divisor = std::sqrt(scalar_mass + arguments.degree_floor);
     const float angular_divisor = std::sqrt(angular_mass + arguments.degree_floor);
     const float inverse_scalar = 1.0f / scalar_divisor;
