@@ -280,6 +280,27 @@ void backward_epilogue(int64_t nodes,
   });
 }
 
+// Private fused path: keep incoming dh for GEMM beta=1; write dz to the other
+// ping-pong buffer. Source and target are disjoint owned fitting workspaces.
+template <int64_t Act, bool CacheSiluDerivative>
+void backward_epilogue_out(int64_t nodes,
+                           int64_t width,
+                           const float* DEEPMD_RESTRICT state,
+                           const float* DEEPMD_RESTRICT incoming,
+                           float* DEEPMD_RESTRICT outgoing) {
+  at::parallel_for(0, nodes, kEpilogueGrain, [&](int64_t begin, int64_t end) {
+    for (int64_t node = begin; node < end; ++node) {
+      const float* DEEPMD_RESTRICT row = state + node * width;
+      const float* DEEPMD_RESTRICT source = incoming + node * width;
+      float* DEEPMD_RESTRICT target = outgoing + node * width;
+      for (int64_t channel = 0; channel < width; ++channel) {
+        target[channel] = source[channel] *
+            derivative_from_state<Act, CacheSiluDerivative>(row[channel]);
+      }
+    }
+  });
+}
+
 /// Dispatch over the two supported activations.
 template <typename Body>
 void dispatch_activation(int64_t act, Body&& body) {
@@ -364,6 +385,9 @@ void fitting_backward_range(const FittingLayerPlan& plan,
     const float* state = saved + plan.offset[layer] * nodes;
     float* out = layer > 0 ? cotangent_next : input_cotangent;
     const bool residual = resnets[layer] && width_out == width_in;
+    // First/last layers retain the original input-output and seed contracts.
+    const bool preserve_incoming = CacheSiluDerivative && residual &&
+        layer > 0 && layer < plan.n_layer - 1;
     dispatch_activation(act, [&](auto tag) {
       constexpr int64_t kAct = decltype(tag)::value;
       if (layer == plan.n_layer - 1) {
@@ -371,18 +395,26 @@ void fitting_backward_range(const FittingLayerPlan& plan,
                             w_head.const_data_ptr<float>(), state, cotangent,
                             residual ? out : nullptr);
       } else {
-        backward_epilogue<kAct, CacheSiluDerivative>(nodes, width_out, state, cotangent,
-                                residual ? out : nullptr);
+        if (preserve_incoming) {
+          backward_epilogue_out<kAct, CacheSiluDerivative>(
+              nodes, width_out, state, cotangent, out);
+        } else {
+          backward_epilogue<kAct, CacheSiluDerivative>(nodes, width_out, state, cotangent,
+                                  residual ? out : nullptr);
+        }
       }
     });
     auto out_matrix = as_matrix(out, nodes, width_in, options);
     auto cotangent_matrix = as_matrix(cotangent, nodes, width_out, options);
-    if (residual) {
+    if (preserve_incoming) {
+      // dz is in out; the unchanged incoming cotangent supplies the residual.
+      cotangent_matrix.addmm_(out_matrix, ws[layer].t());
+    } else if (residual) {
       out_matrix.addmm_(cotangent_matrix, ws[layer].t());
     } else {
       torch::mm_out(out_matrix, cotangent_matrix, ws[layer].t());
     }
-    if (layer > 0) {
+    if (layer > 0 && !preserve_incoming) {
       std::swap(cotangent, cotangent_next);
     }
   }
