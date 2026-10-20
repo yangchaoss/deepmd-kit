@@ -8,11 +8,111 @@
 // with a peel and a tail, which on the short channel blocks of this kernel
 // costs more than the block itself.
 
+#include <cerrno>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <immintrin.h>
+#include <memory>
+#include <new>
 
 namespace deepmd_dpa4c_cpu {
 namespace avx512 {
 namespace {
+// Optional per-worker, per-scan memoization. The spline table and FP control
+// must remain unchanged inside a node; no callback occurs in the edge loop.
+// Never share this object with another scan, table, or worker.
+template <bool Gradient>
+class SplineMemo64 {
+ public:
+  struct Probe { std::uint64_t key; unsigned index; bool hit; };
+  struct Deleter {
+    void operator()(SplineMemo64* p) const noexcept {
+      const int saved_errno = errno;
+      delete p;
+      errno = saved_errno;
+    }
+  };
+  using Owner = std::unique_ptr<SplineMemo64, Deleter>;
+
+  static Owner create() noexcept {
+    const int saved_errno = errno;
+    const char* enabled_env = std::getenv("DP_DPA4C_SPLINE_MEMO");
+    const bool feature = enabled_env && std::strcmp(enabled_env, "1") == 0;
+    const char* trace_env = std::getenv("DP_DPA4C_SPLINE_MEMO_TRACE");
+    const bool trace = trace_env && std::strcmp(trace_env, "1") == 0;
+    const std::uint32_t control = _mm_getcsr() & 0xffc0u;
+    const bool admissible = (control & 0x1f80u) == 0x1f80u &&
+                            (control & 0x6000u) == 0;
+    SplineMemo64* memo = feature && admissible
+        ? new (std::nothrow) SplineMemo64(control, trace) : nullptr;
+    if (trace)
+      std::fprintf(stderr,
+          "DP_SPLINE_MEMO admission phase=%s feature=%u control=%u allocated=%u\n",
+          Gradient ? "backward" : "forward", feature ? 1u : 0u, control,
+          memo ? 1u : 0u);
+    errno = saved_errno;
+    return Owner(memo);
+  }
+
+  bool begin_node() noexcept {
+    if ((_mm_getcsr() & 0xffc0u) != control_) {
+      disabled_ = true;
+    }
+    return !disabled_;
+  }
+  Probe lookup(std::int64_t interval, float dx) noexcept {
+    std::uint32_t dx_bits;
+    std::memcpy(&dx_bits, &dx, sizeof(dx_bits));
+    const std::uint64_t key =
+        (std::uint64_t(static_cast<std::uint32_t>(interval)) << 32) | dx_bits;
+    std::uint64_t hash = key;
+    hash = (hash ^ (hash >> 30)) * UINT64_C(0xbf58476d1ce4e5b9);
+    hash = (hash ^ (hash >> 27)) * UINT64_C(0x94d049bb133111eb);
+    hash ^= hash >> 31;
+    const unsigned index = static_cast<unsigned>(hash & 63u);
+    const bool hit = valid[index] && keys[index] == key;
+    if (hit) ++hits;
+    else ++misses;
+    return {key, index, hit};
+  }
+  float* value(unsigned index) noexcept {
+    return payload + index * 64 * (Gradient ? 2 : 1);
+  }
+  float* slope(unsigned index) noexcept {
+    return Gradient ? value(index) + 64 : nullptr;
+  }
+  void commit(const Probe& probe) noexcept {
+    if (probe.hit) return;
+    if (valid[probe.index]) ++evictions;
+    keys[probe.index] = probe.key;
+    valid[probe.index] = 1;
+  }
+  void report(const char* phase) const noexcept {
+    if (!trace_) return;
+    const int saved_errno = errno;
+    std::fprintf(stderr,
+        "DP_SPLINE_MEMO phase=%s hits=%llu misses=%llu evictions=%llu disabled=%u\n",
+        phase ? phase : "unknown", static_cast<unsigned long long>(hits),
+        static_cast<unsigned long long>(misses),
+        static_cast<unsigned long long>(evictions), disabled_ ? 1u : 0u);
+    errno = saved_errno;
+  }
+
+  std::uint64_t hits = 0, misses = 0, evictions = 0;
+
+ private:
+  explicit SplineMemo64(std::uint32_t control, bool trace) noexcept
+      : control_(control), trace_(trace) {}
+  std::uint32_t control_;
+  bool trace_;
+  bool disabled_ = false;
+  std::uint64_t keys[64];
+  std::uint8_t valid[64]{};
+  alignas(64) float payload[64 * 64 * (Gradient ? 2 : 1)];
+};
+
 // Only the 3*8 + 5*4 live moments of the fixed C64/L2 layout.
 // Unlike the generic loop, discarded angular lanes are not evaluated.
 struct ForwardAngularPacked44 {

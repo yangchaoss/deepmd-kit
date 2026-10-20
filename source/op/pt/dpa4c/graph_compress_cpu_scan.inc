@@ -165,11 +165,19 @@ void forward_scan(const Arguments& arguments,
 #if DPA4C_CPU_BLOCK == 16
   const bool packed_angular = LMAX == 2 && !HAS_MODES && layout.channels == 64 &&
       layout.degree_channels[1] == 8 && layout.degree_channels[2] == 4;
+  // Cache only exact spline results, never geometry or type-dependent FiLM.
+  // Each scan owns its table-independent storage until this worker returns.
+  auto spline_memo = !BRIDGED && packed_angular && layout.spline_count > 0 &&
+                             uint64_t(layout.spline_count) <= UINT32_MAX
+                         ? SplineMemo64<false>::create()
+                         : SplineMemo64<false>::Owner{};
 #endif
 
   for (int64_t node = node_begin; node < node_end; ++node) {
 #if DPA4C_CPU_BLOCK == 16
     ForwardAngularPacked44 angular_packed;
+    auto* node_memo = spline_memo && spline_memo->begin_node()
+                          ? spline_memo.get() : nullptr;
 #endif
     std::fill(work.scalar, work.scalar + padded, 0.0f);
     std::fill(work.angular, work.angular + slots * angular_pad, 0.0f);
@@ -192,14 +200,27 @@ void forward_scan(const Arguments& arguments,
         }
         const float* interval =
             arguments.tables->spline.data() + geometry.interval * layout.spline_stride;
-        spline_value(interval, geometry.dx, layout.channel_blocks,
-                     work.value);
+        const float* edge_value = work.value;
+#if DPA4C_CPU_BLOCK == 16
+        if (node_memo) {
+          const auto probe = node_memo->lookup(geometry.interval, geometry.dx);
+          if (!probe.hit) {
+            spline_value(interval, geometry.dx, layout.channel_blocks,
+                         node_memo->value(probe.index));
+            node_memo->commit(probe);
+          }
+          edge_value = node_memo->value(probe.index);
+        } else
+#endif
+        {
+          spline_value(interval, geometry.dx, layout.channel_blocks, work.value);
+        }
         if (HAS_MODES) {
           mode_value(interval + layout.channel_blocks * 6 * kBlock, geometry.dx,
                      layout.modes, work.mixed);
         }
         film_amplitude<HAS_MODES>(arguments, layout, geometry.pair,
-                                  work.value, work.mixed,
+                                  edge_value, work.mixed,
                                   work.amplitude);
 
         const float chi = geometry.chi;
@@ -267,6 +288,9 @@ void forward_scan(const Arguments& arguments,
                           angular_divisor, center_type, work.readout,
                           arguments.descriptor + node * layout.output_width);
   }
+#if DPA4C_CPU_BLOCK == 16
+  if (spline_memo) spline_memo->report("forward");
+#endif
 }
 
 /// Emit the edge cotangent of one node range.
@@ -288,8 +312,20 @@ void backward_scan(const Arguments& arguments,
   float basis[angular_components(kMaxDegree)];
   float basis_cotangent[angular_components(kMaxDegree)];
   float divisor_cotangent[2];
+#if DPA4C_CPU_BLOCK == 16
+  const bool memo_layout = LMAX == 2 && !HAS_MODES && layout.channels == 64 &&
+      layout.degree_channels[1] == 8 && layout.degree_channels[2] == 4;
+  auto spline_memo = !BRIDGED && memo_layout && layout.spline_count > 0 &&
+                             uint64_t(layout.spline_count) <= UINT32_MAX
+                         ? SplineMemo64<true>::create()
+                         : SplineMemo64<true>::Owner{};
+#endif
 
   for (int64_t node = node_begin; node < node_end; ++node) {
+#if DPA4C_CPU_BLOCK == 16
+    auto* node_memo = spline_memo && spline_memo->begin_node()
+                          ? spline_memo.get() : nullptr;
+#endif
     const float* state = arguments.state + node * (layout.moment_width + 2);
     const float scalar_divisor = state[0];
     const float angular_divisor = state[1];
@@ -357,14 +393,31 @@ void backward_scan(const Arguments& arguments,
       }
       const float* interval =
           arguments.tables->spline.data() + geometry.interval * layout.spline_stride;
-      spline_value_and_derivative(interval, geometry.dx, layout.channel_blocks,
-                                  work.value, work.slope);
+      const float* edge_value = work.value;
+      const float* edge_slope = work.slope;
+#if DPA4C_CPU_BLOCK == 16
+      if (node_memo) {
+        const auto probe = node_memo->lookup(geometry.interval, geometry.dx);
+        if (!probe.hit) {
+          spline_value_and_derivative(interval, geometry.dx, layout.channel_blocks,
+                                      node_memo->value(probe.index),
+                                      node_memo->slope(probe.index));
+          node_memo->commit(probe);
+        }
+        edge_value = node_memo->value(probe.index);
+        edge_slope = node_memo->slope(probe.index);
+      } else
+#endif
+      {
+        spline_value_and_derivative(interval, geometry.dx, layout.channel_blocks,
+                                    work.value, work.slope);
+      }
       if (HAS_MODES) {
         mode_value_and_derivative(interval + layout.channel_blocks * 6 * kBlock,
                                   geometry.dx, layout.modes, work.mixed,
                                   work.mixed + layout.modes);
       }
-      film_amplitude<HAS_MODES>(arguments, layout, geometry.pair, work.value,
+      film_amplitude<HAS_MODES>(arguments, layout, geometry.pair, edge_value,
                                 work.mixed, work.amplitude);
 
       const float chi = geometry.chi;
@@ -463,7 +516,7 @@ void backward_scan(const Arguments& arguments,
       const float* __restrict scalar = work.scalar;
       const float* __restrict film =
           arguments.tables->film.data() + geometry.pair * 2 * padded;
-      const float* __restrict slope = work.slope;
+      const float* __restrict slope = edge_slope;
       float* __restrict amplitude_cotangent = work.cotangent;
       float envelope_lanes[kBlock];
       float radial_lanes[kBlock];
@@ -554,6 +607,9 @@ void backward_scan(const Arguments& arguments,
       arguments.pair_energy[node] += static_cast<double>(pair_energy);
     }
   }
+#if DPA4C_CPU_BLOCK == 16
+  if (spline_memo) spline_memo->report("backward");
+#endif
 }
 
 }  // namespace
